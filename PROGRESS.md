@@ -8,13 +8,23 @@
 | 4. Independent review (Claude Fable 5.2) | ✅ Done: 14 findings (0 Critical, 2 High, 7 Medium, 5 Low) | 2026-11-14 |
 | 5. Apply review findings | ✅ Done: 12 fixed, 1 partly fixed, 1 not reproduced; 487 tests pass | 2026-11-14 |
 | 6. End-to-end Docker test | ✅ Done: 11/11 e2e pass; e2e latency p50 1.7 s / p95 2.6 s at 51 tx/s | 2026-11-14 |
-| 7. Delivery | ⏳ Next | |
+| 7. Delivery | ✅ Done: README, demo script, URLs verified | 2026-11-14 |
+
+---
+
+## Phase 7: Delivery
+
+- **[README.md](README.md)** (complete): overview and architecture diagram, Windows prerequisites, dataset setup, step-by-step PowerShell commands, train/start/stop/reset, unit and e2e tests, a manual UI test checklist, model results, streaming performance, configuration, project structure, and Windows/Docker troubleshooting.
+- **[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)**: a 10-minute presentation script with talking points, likely questions, and a fallback plan.
+- **URLs verified from the Windows host (HTTP 200):** dashboard http://localhost:8501 (Arabic: `/?lang=ar`), Kafka UI http://localhost:8081, Spark UI http://localhost:4040. All six long-running containers are healthy.
 
 ---
 
 ## Phase 6: End-to-end Docker test
 
-After your go-ahead: `docker compose up -d --build` (via `.un.ps1 up`), health check of every container, the automated e2e suite ([tests/e2e/test_pipeline.py](tests/e2e/test_pipeline.py), run with `.un.ps1 e2e`), dashboard screenshots, and a latency/throughput report.
+After your go-ahead: `docker compose up -d --build` (via `.
+un.ps1 up`), health check of every container, the automated e2e suite ([tests/e2e/test_pipeline.py](tests/e2e/test_pipeline.py), run with `.
+un.ps1 e2e`), dashboard screenshots, and a latency/throughput report.
 
 **Containers:** kafka, postgres, kafka-ui, producer, stream-processor and dashboard are all *running (healthy)*; kafka-init and trainer exited 0 (topics created; training skipped because the model exists). Memory: about **2.6 GB** for the whole stack (stream processor 1.5 / 2 GB, Kafka 0.5 / 1 GB).
 
