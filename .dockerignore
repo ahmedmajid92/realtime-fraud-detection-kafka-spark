@@ -1,0 +1,22 @@
+# Keep secrets, data and generated artifacts out of image build contexts.
+# data/, models/ and docs/ are bind-mounted at runtime instead.
+.git
+.gitignore
+.gitattributes
+.env
+data
+models
+docs
+reports
+.claude
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+*.md
+run.ps1

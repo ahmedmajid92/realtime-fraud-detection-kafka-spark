@@ -1,0 +1,296 @@
+# Real-time fraud detection stack. Start everything with:  docker compose up -d
+# (the first start trains the model, about 10-15 min; later starts skip training).
+# All settings come from .env (copy .env.example or run .\run.ps1 setup).
+# Every host port is bound to 127.0.0.1, so nothing is exposed to your network.
+
+name: ${COMPOSE_PROJECT_NAME:-fraud-detection}
+
+x-spark-build: &spark-build
+  context: .
+  dockerfile: docker/spark.Dockerfile
+  target: runtime
+
+x-app-build: &app-build
+  context: .
+  dockerfile: docker/app.Dockerfile
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ---------------------------------------------------------------- Kafka (KRaft)
+  kafka:
+    image: apache/kafka:4.1.2
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:${KAFKA_EXTERNAL_HOST_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_CLEANER_MIN_COMPACTION_LAG_MS: 0
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS}
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+    ports:
+      - "127.0.0.1:${KAFKA_EXTERNAL_HOST_PORT}:9094"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    mem_limit: ${KAFKA_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "KAFKA_HEAP_OPTS='-Xmx96m' /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 20s
+      retries: 18
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  kafka-init:
+    image: apache/kafka:4.1.2
+    entrypoint: ["/bin/bash", "-c", "tr -d '\\r' < /scripts/create-topics.sh | bash"]
+    env_file: .env
+    volumes:
+      - ./docker/kafka/create-topics.sh:/scripts/create-topics.sh:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+    mem_limit: 256m
+    restart: "no"
+    logging: *default-logging
+
+  # ---------------------------------------------------------------- PostgreSQL
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: UTC
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=60", "-c", "timezone=UTC"]
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    mem_limit: ${POSTGRES_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------- Kafka UI (read-only)
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    environment:
+      KAFKA_CLUSTERS_0_NAME: fraud-detection
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
+      KAFKA_CLUSTERS_0_READONLY: "true"
+      DYNAMIC_CONFIG_ENABLED: "false"
+      JAVA_OPTS: "-Xms64m -Xmx320m"
+    ports:
+      - "127.0.0.1:${KAFKA_UI_HOST_PORT}:8080"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    mem_limit: ${KAFKA_UI_MEM_LIMIT}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------- Offline training (one-shot)
+  trainer:
+    build: *spark-build
+    command: ["python", "-m", "src.training.train_model"]
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./docs:/app/docs
+    mem_limit: ${TRAINER_MEM_LIMIT}
+    cpus: ${TRAINER_CPUS}
+    init: true
+    restart: "no"
+    logging: *default-logging
+
+  # ---------------------------------------------------------------- Producer
+  producer:
+    build: *app-build
+    command: ["python", "-m", "src.producer.producer"]
+    env_file: .env
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      trainer:
+        condition: service_completed_successfully
+    mem_limit: ${PRODUCER_MEM_LIMIT}
+    init: true
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/healthcheck.py", "file", "/tmp/producer.heartbeat", "30"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------- Spark Structured Streaming
+  stream-processor:
+    build: *spark-build
+    command: ["python", "-m", "src.streaming.stream_processor"]
+    env_file: .env
+    volumes:
+      - ./models:/app/models:ro
+      - spark-checkpoints:/checkpoints
+    ports:
+      - "127.0.0.1:${SPARK_UI_HOST_PORT}:4040"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      trainer:
+        condition: service_completed_successfully
+    mem_limit: ${STREAM_MEM_LIMIT}
+    cpus: ${STREAM_CPUS}
+    init: true
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/healthcheck.py", "file", "/tmp/stream-processor.heartbeat", "60"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 120s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ---------------------------------------------------------------- Dashboard
+  dashboard:
+    build: *app-build
+    command: ["streamlit", "run", "src/dashboard/app.py"]
+    env_file: .env
+    volumes:
+      - ./data:/app/data:ro
+      - ./models:/app/models:ro
+      - ./docs:/app/docs:ro
+    ports:
+      - "127.0.0.1:${DASHBOARD_HOST_PORT}:8501"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    mem_limit: ${DASHBOARD_MEM_LIMIT}
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/healthcheck.py", "http", "http://localhost:8501/_stcore/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ================================================================ Tool containers (profiles)
+  tests:
+    profiles: ["test"]
+    build:
+      <<: *spark-build
+      target: test
+    command: ["pytest", "tests/unit", "--cov=src", "--cov-report=term-missing", "--cov-report=html:reports/coverage"]
+    env_file: .env
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./reports:/app/reports
+    mem_limit: 3g
+    init: true
+    logging: *default-logging
+
+  e2e:
+    profiles: ["e2e"]
+    build:
+      <<: *spark-build
+      target: test
+    command: ["pytest", "tests/e2e", "-v", "-s", "-p", "no:cacheprovider"]
+    env_file: .env
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./models:/app/models:ro
+      - ./docs:/app/docs
+    mem_limit: 1g
+    init: true
+    logging: *default-logging
+
+  screenshots:
+    profiles: ["tools"]
+    image: mcr.microsoft.com/playwright/python:v1.64.1-noble
+    working_dir: /work
+    command: ["python", "/work/scripts/screenshots.py"]
+    environment:
+      DASHBOARD_URL: http://dashboard:8501
+      SCREENSHOT_DIR: /work/out
+    volumes:
+      - ./scripts:/work/scripts:ro
+      - ./docs/screenshots:/work/out
+    ipc: host
+    mem_limit: 2g
+    logging: *default-logging
+
+  diagrams:
+    profiles: ["tools"]
+    image: minlag/mermaid-cli:12.0.0
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mmdc -p /puppeteer-config.json -i /data/architecture.mmd -o /data/architecture.svg -b white &&
+        mmdc -p /puppeteer-config.json -i /data/architecture.mmd -o /data/architecture.png -b white --size 2400 -s 2
+    volumes:
+      - ./docs/figures:/data
+    logging: *default-logging
+
+  downloader:
+    profiles: ["tools"]
+    image: python:3.12.15-slim-bookworm
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        pip install --quiet --disable-pip-version-check kaggle==2.2.5 &&
+        kaggle datasets download -d mlg-ulb/creditcardfraud -p /data/raw --unzip &&
+        ls -l /data/raw
+    environment:
+      KAGGLE_CONFIG_DIR: /kaggle
+    volumes:
+      - ./data:/data
+      - ${KAGGLE_CONFIG_HOST_DIR:-./.kaggle}:/kaggle:ro
+    logging: *default-logging
+
+volumes:
+  kafka-data:
+  pg-data:
+  spark-checkpoints:

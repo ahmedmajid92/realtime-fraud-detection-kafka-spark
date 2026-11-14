@@ -1,0 +1,101 @@
+"""Pure DataFrame transformations of the stream processor.
+
+None of these functions touch Kafka or Postgres, so unit tests run them on small static
+DataFrames. The streaming job chains them inside ``foreachBatch``::
+
+    parse_transactions → filter(is_valid_transaction) → score → enrich → apply_threshold
+"""
+
+from __future__ import annotations
+
+from pyspark.ml import PipelineModel
+from pyspark.ml.functions import vector_to_array
+from pyspark.sql import Column, DataFrame
+from pyspark.sql import functions as F
+
+from src.common.schemas import (
+    AMOUNT_COLUMN,
+    PREDICTION_FIELDS,
+    RAW_INPUT_COLUMNS,
+    REQUIRED_TRANSACTION_FIELDS,
+    TIME_COLUMN,
+    Source,
+)
+from src.common.spark_schemas import transaction_schema
+
+FRAUD_PROBABILITY_COL = "fraud_probability"
+
+
+def parse_transactions(raw: DataFrame) -> DataFrame:
+    """Kafka records (binary ``value``) → one typed column per transaction field.
+
+    Malformed JSON yields a row of NULLs (Spark's PERMISSIVE mode) and an unparsable
+    ``event_time`` becomes NULL via ``try_to_timestamp``; both are removed by
+    :func:`is_valid_transaction` instead of crashing the micro-batch.
+    """
+    parsed = raw.select(
+        F.from_json(F.col("value").cast("string"), transaction_schema()).alias("txn")
+    ).select("txn.*")
+    return parsed.withColumn("event_time", F.try_to_timestamp(F.col("event_time")))
+
+
+def is_valid_transaction() -> Column:
+    """Row filter: required fields present, known source, finite non-negative inputs."""
+    condition = F.lit(True)
+    for name in REQUIRED_TRANSACTION_FIELDS:
+        condition = condition & F.col(name).isNotNull()
+    for name in RAW_INPUT_COLUMNS:
+        condition = condition & ~F.isnan(F.col(name))
+    condition = condition & F.col("source").isin([s.value for s in Source])
+    condition = condition & (F.col(AMOUNT_COLUMN) >= 0) & (F.col(TIME_COLUMN) >= 0)
+    condition = condition & (F.col("actual_class").isNull() | F.col("actual_class").isin(0, 1))
+    return condition
+
+
+def score(transactions: DataFrame, model: PipelineModel) -> DataFrame:
+    """Apply the saved PipelineModel and extract ``fraud_probability`` = P(class 1)."""
+    return model.transform(transactions).withColumn(
+        FRAUD_PROBABILITY_COL, vector_to_array(F.col("probability")).getItem(1)
+    )
+
+
+def enrich(scored: DataFrame, model_name: str) -> DataFrame:
+    """Keep the output fields and add processing time, latency, hour and model name.
+
+    ``latency_ms`` = time from the producer's ``event_time`` to scoring in this batch
+    (Kafka queueing + trigger wait + model inference). ``current_timestamp()`` is fixed
+    once per query execution, so every row of a batch shares the same ``processed_at``.
+    """
+    processed_at = F.current_timestamp()
+    latency_ms = (F.unix_micros(processed_at) - F.unix_micros(F.col("event_time"))) / F.lit(1000.0)
+    return scored.select(
+        F.col("transaction_id"),
+        F.col("event_time"),
+        processed_at.alias("processed_at"),
+        latency_ms.alias("latency_ms"),
+        F.col("source"),
+        F.col("replay_pass"),
+        F.col(AMOUNT_COLUMN).alias("amount"),
+        F.floor(F.pmod(F.col(TIME_COLUMN) / F.lit(3600.0), F.lit(24.0))).cast("int").alias("hour"),
+        F.col(FRAUD_PROBABILITY_COL),
+        F.col("actual_class"),
+        F.lit(model_name).alias("model_name"),
+    )
+
+
+def apply_threshold(enriched: DataFrame, threshold: float) -> DataFrame:
+    """Label each row: ``prediction = 1`` when ``fraud_probability >= threshold``."""
+    if not 0.0 < threshold < 1.0:
+        raise ValueError(f"threshold must be in (0, 1), got {threshold}")
+    labelled = enriched.withColumn(
+        "prediction", (F.col(FRAUD_PROBABILITY_COL) >= F.lit(float(threshold))).cast("int")
+    ).withColumn("threshold", F.lit(float(threshold)))
+    return labelled.select(*PREDICTION_FIELDS)
+
+
+def to_kafka_records(predictions: DataFrame) -> DataFrame:
+    """``key`` = transaction id, ``value`` = prediction JSON (null fields are omitted)."""
+    return predictions.select(
+        F.col("transaction_id").alias("key"),
+        F.to_json(F.struct(*[F.col(name) for name in PREDICTION_FIELDS])).alias("value"),
+    )

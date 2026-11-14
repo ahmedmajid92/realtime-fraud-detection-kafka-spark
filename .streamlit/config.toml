@@ -1,0 +1,18 @@
+[server]
+headless = true
+port = 8501
+address = "0.0.0.0"
+fileWatcherType = "none"
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+# Accent = categorical slot 1 of the validated chart palette. No base is set, so
+# viewers get light or dark following their OS / Streamlit settings, and the charts
+# switch palettes to match.
+primaryColor = "#2a78d6"

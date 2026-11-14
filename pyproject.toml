@@ -1,0 +1,55 @@
+[project]
+name = "realtime-fraud-detection"
+version = "1.0.0"
+description = "Real-time credit card fraud detection with Kafka, Spark Structured Streaming, Spark MLlib and Streamlit"
+requires-python = ">=3.12"
+readme = "README.md"
+
+# Dependencies are pinned per Docker image in requirements/*.txt (+ constraints.txt).
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+addopts = "-ra --strict-markers"
+markers = [
+    "spark: needs a local SparkSession (slower)",
+    "e2e: needs the full Docker Compose stack running",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:pyspark.*",
+    "ignore::DeprecationWarning:py4j.*",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+# Streamlit UI glue and service entry points (main loops) are exercised by the e2e test
+# and screenshots rather than unit tests; all logic they call lives in tested modules.
+omit = [
+    "src/dashboard/app.py",
+    "src/dashboard/views/*",
+    "src/dashboard/resources.py",
+    "src/dashboard/sidebar.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+precision = 1
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# N815-style mixed-case names (V1..V28, Time, Amount) mirror the Kaggle dataset columns.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+# Long lines here are prose: UI translations and Markdown report text.
+"src/dashboard/helpers/i18n.py" = ["E501"]
+"src/training/report.py" = ["E501"]
+"tests/**" = ["E501"]

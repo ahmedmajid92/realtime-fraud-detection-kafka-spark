@@ -1,0 +1,13 @@
+# fraud-spark image: trainer, stream-processor (and the base of the test image).
+# Direct dependencies pinned exactly; transitive ones are pinned in constraints.txt.
+pyspark==4.1.4
+pandas==2.3.3
+numpy==2.3.4
+pyarrow==24.0.0
+scikit-learn==1.9.1
+matplotlib==3.11.2
+pydantic==2.14.2
+pydantic-settings==2.16.2
+structlog==26.1.0
+psycopg[binary]==3.3.6
+confluent-kafka==2.16.1

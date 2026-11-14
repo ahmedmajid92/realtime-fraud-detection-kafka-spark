@@ -27,7 +27,7 @@ An end-to-end system that:
 | # | Topic | Decision |
 |---|---|---|
 | 1 | Environment | Windows 11 Pro, 32 GB RAM, Docker Desktop 28.5 (WSL2). Memory limits are set for an **8–16 GB laptop (~6 GB stack budget)**. **All tests run in Docker** (the host's Java 24 and Python 3.13 don't suit PySpark). **Git:** `git init`, one commit per phase, never pushed. |
-| 2 | Dataset | Manual Kaggle download to `data/raw/creditcard.csv`, plus an optional `scripts/download_data.ps1` (Kaggle API, used only if `kaggle.json` exists). **Exact duplicates are removed before splitting** (prevents train/test leakage). **Stratified 70/15/15 train/validation/test split** (seed 42). |
+| 2 | Dataset | Manual Kaggle download to `data/raw/creditcard.csv`, plus an optional `.un.ps1 download-data` (Kaggle API in a container, used only if `kaggle.json` exists). **Exact duplicates are removed before splitting** (prevents train/test leakage). **Exact stratified 70/15/15 train/validation/test split** (seed 42). |
 | 3 | Models and imbalance | **LR, RF, GBT, LinearSVC**, each trained with **class weights** and with **undersampling** (1 fraud : 10 legit, train split only). **Small grid** of 2 configs per model, so 16 fits. Features: V1–V28, `log1p(Amount)`, **hour-of-day** (as sin/cos) from `Time`; raw `Time` is dropped. |
 | 4 | Metric and threshold | The best model is chosen by **validation AUC-PR**. The default alert threshold maximizes **F1 on validation**. The **test split is used once**, for final reporting. ROC-AUC, precision, recall, F1 and the confusion matrix are reported for every model. |
 | 5 | Streaming | **50 tx/s** default, **loops forever**, **original `Time` order**. **Live producer control** from the dashboard (pause/resume/rate) via a `producer-control` topic. |
@@ -116,7 +116,7 @@ Entry point is `src/training/train_model.py`, run with `spark-submit` in the `tr
 - **Modes:** under `docker compose up` it runs in *train-if-missing* mode: it exits immediately if `models/best_model/` and `models/metrics.json` already exist. `.\run.ps1 train` forces a retrain.
 - **Load:** reads the CSV with an explicit schema. If the file is missing, it stops with a clear message that includes the Kaggle link and the expected path. It validates the column names and that `Class` is in {0, 1}.
 - **Clean:** drops exact duplicate rows (about 1,081) **before** splitting, and logs the count.
-- **Split:** stratified 70/15/15. `randomSplit` is applied separately to each class and the results are unioned, so every split keeps the 0.17% fraud ratio. The splits are saved to `data/processed/{train,val,test}.parquet`, with test sorted by `Time` for replay.
+- **Split:** **exact** stratified 70/15/15. *(Changed during Phase 2: per-class `randomSplit` gave 321/89/63 frauds instead of about 331/71/71.)* Within each class, rows are ranked by a seeded content hash `xxhash64(seed, row)` and cut at 70% and 85%. Every split therefore has the same fraud ratio, and the split is reproducible whatever order Spark reads the rows in. The splits are saved to `data/processed/{train,val,test}.parquet`, with test sorted by `Time` for replay.
 - **Feature pipeline:** fitted on **train only** and stored inside the `PipelineModel`, so streaming applies exactly the same transforms (no train/serve skew):
   `SQLTransformer` (`log_amount = log1p(Amount)`, `hour_sin` / `hour_cos` from `(Time/3600) mod 24`) → `VectorAssembler(V1..V28, log_amount, hour_sin, hour_cos)` → `StandardScaler(withMean, withStd)` → classifier.
   The feature list is one constant (`FEATURE_COLUMNS` in `src/common/schemas.py`); **`Class` is never a feature**, and a unit test asserts this.
@@ -272,9 +272,9 @@ Defined once in `src/common/schemas.py` as **pydantic models** (producer, dashbo
 **`producer-control`** (`ControlCommand`, key `"producer"`)
 
 ```json
-{ "command": "set_rate", "rate": 100.0, "issued_at": "2026-11-14T18:05:00Z", "issued_by": "dashboard" }
+{ "command": "set_rate", "paused": false, "rate": 100.0, "issued_at": "2026-11-14T18:05:00.000Z", "issued_by": "dashboard" }
 ```
-`command` ∈ {`pause`, `resume`, `set_rate`}. `rate` is required only for `set_rate`.
+`command` ∈ {`pause`, `resume`, `set_rate`}. *(Changed during Phase 2.)* Every message carries the **full desired state** (`paused` + `rate`), not only the change. Log compaction keeps just the latest message per key, so a lone `set_rate` must not erase an earlier `pause`.
 
 **Latency definitions**
 - *Processing latency* (in each prediction): `processed_at − event_time`. This covers Kafka queueing, the trigger wait and model scoring.
@@ -317,9 +317,10 @@ Versions were checked on Docker Hub, PyPI and Maven Central on 2026-11-14. Patch
 | Screenshots | Playwright (Python) + its official image | matching versions, pinned in Phase 2 |
 | Diagrams | `minlag/mermaid-cli` | pinned in Phase 2 |
 
-**Images built:**
-- `fraud-spark`: Python 3.12, Temurin 17, PySpark, connector jars and ML deps. Used by `trainer`, `stream-processor`, `tests` and `e2e`.
-- `fraud-app`: Python 3.12 and lightweight deps (no Java). Used by `producer` and `dashboard`.
+**Images built** from two Dockerfiles. Compose names them `fraud-detection-<service>`; services that share a Dockerfile reuse the same cached layers. *(Changed during Phase 2: an explicit shared tag such as `fraud-spark:1.0.0` made parallel builds collide.)*
+- `docker/spark.Dockerfile` ("fraud-spark"): Python 3.12, Temurin 17, PySpark, connector jars and ML deps. Used by `trainer`, `stream-processor`, `tests` and `e2e` (target `test`).
+- `docker/app.Dockerfile` ("fraud-app"): Python 3.12 and lightweight deps (no Java). Used by `producer` and `dashboard`.
+- Every direct dependency is pinned in `requirements/*.txt`, and the full transitive set in `requirements/constraints.txt` (a `pip freeze` of the test image).
 
 ---
 
@@ -382,15 +383,16 @@ realtime-fraud-detection-kafka-spark/
 │   ├── kafka/create-topics.sh
 │   └── postgres/init.sql
 ├── requirements/                       # spark.txt, app.txt, dev.txt (exact pins)
-├── scripts/                            # download_data.ps1, healthcheck.py, screenshots.py
+├── scripts/                            # healthcheck.py, screenshots.py
 ├── src/
-│   ├── common/                         # config.py, schemas.py, logging.py, kafka_utils.py, db.py
+│   ├── common/                         # config.py, schemas.py, spark_schemas.py, spark.py, logging_setup.py, health.py, kafka_utils.py, db.py
 │   ├── training/                       # data_prep.py, features.py, models.py, evaluate.py, report.py, train_model.py
-│   ├── producer/                       # producer.py, rate_limiter.py, control.py, serializer.py
-│   ├── streaming/                      # stream_processor.py, transforms.py, sinks.py, listener.py
+│   ├── producer/                       # producer.py, replay.py, rate_limiter.py, control.py
+│   ├── streaming/                      # stream_processor.py, batch.py, transforms.py, sinks.py, threshold.py, listener.py
 │   └── dashboard/
-│       ├── app.py                      # navigation, sidebar
-│       ├── pages/                      # live_monitor, model_performance, test_transaction, system_health, about
+│       ├── app.py, sidebar.py, resources.py  # (Streamlit glue)
+│       ├── views/                      # live_monitor, model_performance, test_transaction, system_health, about
+│       │                               # (not "pages/": that name triggers Streamlit's legacy auto-multipage mode)
 │       └── helpers/                    # kpis.py, formatting.py, queries.py, i18n.py, control.py, samples.py
 ├── tests/
 │   ├── conftest.py                     # local SparkSession fixture, sample rows
