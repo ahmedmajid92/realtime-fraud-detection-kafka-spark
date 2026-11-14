@@ -11,7 +11,7 @@ from pathlib import Path
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
-from src.common.schemas import LABEL_COLUMN, TIME_COLUMN, WEIGHT_COLUMN
+from src.common.schemas import CSV_COLUMNS, LABEL_COLUMN, TIME_COLUMN, WEIGHT_COLUMN
 from src.common.spark_schemas import csv_schema
 
 KAGGLE_DATASET_URL = "https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud"
@@ -68,13 +68,29 @@ def ensure_dataset_exists(path: Path) -> None:
         raise DatasetMissingError(missing_dataset_message(path))
 
 
-def load_raw_dataset(spark: SparkSession, path: Path) -> DataFrame:
-    """Read ``creditcard.csv`` with an explicit schema.
+def read_csv_header(path: Path) -> tuple[str, ...]:
+    """Column names from the first line of a CSV file (quotes and whitespace stripped)."""
+    with path.open(encoding="utf-8-sig") as handle:
+        first_line = handle.readline()
+    return tuple(name.strip().strip('"') for name in first_line.strip().split(","))
 
-    ``enforceSchema=False`` makes Spark check the CSV header against the schema's column
-    names, and ``FAILFAST`` aborts on malformed rows instead of silently nulling them.
+
+def load_raw_dataset(spark: SparkSession, path: Path) -> DataFrame:
+    """Read ``creditcard.csv`` with an explicit schema after checking its header.
+
+    The header is checked explicitly: Spark's own check (``enforceSchema=False``) only
+    covers the columns a query reads, so a renamed column could slip through validation
+    and fail much later. ``FAILFAST`` aborts on malformed rows instead of nulling them.
     """
     ensure_dataset_exists(path)
+    header = read_csv_header(path)
+    if header != CSV_COLUMNS:
+        unexpected = sorted(set(header) - set(CSV_COLUMNS))
+        missing = sorted(set(CSV_COLUMNS) - set(header))
+        raise DatasetValidationError(
+            f"{path.name} does not look like the Kaggle creditcard.csv: "
+            f"missing columns {missing}, unexpected columns {unexpected}"
+        )
     return spark.read.csv(
         str(path), header=True, schema=csv_schema(), enforceSchema=False, mode="FAILFAST"
     )

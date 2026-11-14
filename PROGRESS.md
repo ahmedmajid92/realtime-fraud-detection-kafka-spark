@@ -4,11 +4,31 @@
 |---|---|---|
 | 1. Planning | ✅ Done, plan approved | 2026-11-14 |
 | 2. Implementation | ✅ Done, model trained | 2026-11-14 |
-| 3. Unit testing | ⏳ Next | |
-| 4. Independent review (Claude Fable 5.2) | ⏳ Not started | |
+| 3. Unit testing | ✅ Done: 457 passing, 95.9% coverage | 2026-11-14 |
+| 4. Independent review (Claude Fable 5.2) | ⏳ Next | |
 | 5. Apply review findings | ⏳ Not started | |
 | 6. End-to-end Docker test | ⏳ Not started (needs your go-ahead) | |
 | 7. Delivery | ⏳ Not started | |
+
+---
+
+## Phase 3: Unit testing
+
+Run with `.\run.ps1 test` (pytest in the `fraud-spark` test image, with a local `SparkSession` fixture). There are **190 test functions and 457 test cases** (209 of the cases are per-key translation-placeholder checks). The run takes about 3 min. Kafka and PostgreSQL are replaced by in-memory fakes ([tests/unit/fakes.py](tests/unit/fakes.py)).
+
+| Area (from the brief) | Test module | What is covered |
+|---|---|---|
+| Config loading | `test_config.py` | env parsing, required endpoints fail fast, secret masking, range checks, blank override → `None` |
+| Message schemas | `test_schemas.py` | JSON round-trip and `Z` timestamps, rejection of bad values and unknown fields (incl. `Class`), pydantic ↔ Spark field parity, label not in features, full-state control commands |
+| Preprocessing | `test_data_prep.py` | header check, label validation, dedup count, **exact, disjoint, order-independent stratified split**, class weights, undersampling ratio, sorted Parquet output |
+| Feature pipeline and model | `test_features_models.py`, `test_evaluate.py`, `test_report.py`, `test_train_model.py` | hour sin/cos and log-amount values, standardised 31-dim vector, model specs, Platt-calibrated SVM, **model save → load → predict on sample rows**, metric maths, **unbinned AUC-PR regression test**, figures and RESULTS.md, a full training run on synthetic data |
+| Producer (Kafka mocked) | `test_producer.py` | rate limiter (spacing, catch-up, burst cap), control listener thread, pause/resume/rate pick-up, looping passes, serialization, full-queue retry, `main()` end to end |
+| Stream processor (static DataFrames) | `test_streaming.py` | parsing, 8 kinds of malformed input filtered, scoring, latency/hour enrichment, inclusive threshold, Kafka JSON ↔ schema, Postgres batching, threshold fallback, listener, `foreachBatch` fan-out, Kafka source on the classpath |
+| Dashboard helpers | `test_dashboard_*.py` | KPIs (throughput, lag, quality), formatting and row highlighting, test-page samples and edits, SQL wrappers, Kafka publish/read, chart structure and palette roles, EN/AR key completeness |
+
+**Coverage: 95.9%** of core logic (statements + branches; Streamlit page glue is excluded as planned). The one module below target is `stream_processor.py` at 41%: its `main()` needs a live Kafka and Postgres and is exercised by the Phase 6 e2e test. Everything it calls is unit-tested.
+
+**Bugs found by the tests and fixed:** a CSV with a renamed column passed validation, because Spark only checks the header for columns a query actually reads. The loader now checks the header explicitly and raises a clear `DatasetValidationError`.
 
 ---
 
