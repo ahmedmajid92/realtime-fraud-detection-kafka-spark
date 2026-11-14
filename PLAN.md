@@ -178,13 +178,16 @@ Entry point is `src/training/train_model.py`, run as `python -m src.training.tra
   - `enrich(df)`: `processed_at`, `latency_ms = processed_at − event_time`, `hour`, `model_name`.
   - `apply_threshold(df, t)`: `prediction = fraud_probability ≥ t`, plus a `threshold` column.
   - `to_kafka_records(df)`: key and JSON value columns.
-- **One streaming query**, `trigger(processingTime="1 second")`, `foreachBatch(process_batch)`:
-  1. persist the batch;
-  2. read `alert_threshold` from Postgres `settings` (falls back to the last good value, then to `metrics.json`);
-  3. score, enrich and label;
-  4. write all rows to Kafka `predictions`, and rows with `prediction=1` to `fraud-alerts`;
-  5. upsert into Postgres `predictions` via `foreachPartition` (psycopg, `ON CONFLICT (transaction_id) DO NOTHING`; this runs on executors, so it scales with partitions);
-  6. unpersist.
+- **One streaming query**, `trigger(processingTime="1 second")`. *(Changed during Phase 6: scoring moved from `foreachBatch` into the streaming plan, after measuring that rebuilding the model pipeline every batch cost about 0.5 s.)*
+  - **Streaming plan, built once:** parse → `observe("input_quality")` (invalid-row counts reported in each progress event, no extra job) → filter valid → `PipelineModel.transform` (the forest is broadcast once) → enrich.
+  - **`foreachBatch(process_batch)`, per micro-batch:**
+    1. read `alert_threshold` from Postgres `settings` (falls back to the last good value, then to `metrics.json`);
+    2. label with it, coalesce to one partition (small batches: one task and one DB connection), persist;
+    3. one aggregation for batch statistics, which also materializes the cache; empty batches stop here;
+    4. write all rows to Kafka `predictions`, and rows with `prediction=1` to `fraud-alerts`;
+    5. upsert into Postgres `predictions` via `foreachPartition` (psycopg, `ON CONFLICT (transaction_id) DO NOTHING`);
+    6. unpersist.
+  - Result: micro-batch duration fell from about 2.2 s to about 0.8 s at 50 tx/s, and processing latency from about 2.5 s to about 0.6 s (p50).
 - **Checkpoint:** a named Docker volume (`/checkpoints/stream-processor`). It's not a Windows bind mount, which avoids rename/fsync problems.
 - **Delivery semantics:** at-least-once to Kafka; **effectively-once in Postgres** (idempotent upsert), which is what the dashboard reads.
 - **`StreamingQueryListener`:** on each progress event it touches a heartbeat file (for the healthcheck) and inserts a row into `stream_progress` (input rate, processing rate, batch duration, end offsets) for the System Health page.
@@ -331,7 +334,7 @@ Versions were checked on Docker Hub, PyPI and Maven Central on 2026-11-14. Patch
 |---|---|---|---|---|---|
 | `kafka` | apache/kafka | 1 GB (heap 512 MB) | 9094 | `kafka-broker-api-versions.sh` | — |
 | `kafka-init` | apache/kafka | 256 MB | — | one-shot, exit 0 | kafka healthy |
-| `postgres` | postgres | 256 MB | 5433 | `pg_isready` | — |
+| `postgres` | postgres | 256 MB | 15432 | `pg_isready` | — |
 | `kafka-ui` | kafbat/kafka-ui | 512 MB | 8081 | HTTP `/actuator/health` | kafka-init done |
 | `trainer` | fraud-spark | 3 GB (driver 2 GB) | — | one-shot | — |
 | `producer` | fraud-app | 256 MB | — | heartbeat file < 30 s old | kafka-init done, trainer done |
@@ -447,7 +450,7 @@ realtime-fraud-detection-kafka-spark/
 | `TRAINER_CPUS` larger than the CPUs given to Docker makes Compose fail | Default of 4; `run.ps1 setup` reads Docker's CPU count and lowers it if needed |
 | Kafka listener confusion (host vs container) | Separate INTERNAL / EXTERNAL listeners; containers only ever use `kafka:9092` |
 | CRLF line endings break shell scripts | `.gitattributes` plus `\r` stripping in the Dockerfiles |
-| Port conflicts (e.g. a local Postgres on 5432) | Every host port is configurable in `.env`; Postgres defaults to 5433 |
+| Port conflicts (e.g. a local Postgres on 5432 or 5433) | Every host port is configurable in `.env`; Postgres defaults to 15432 *(changed in Phase 6: the development machine already had a native PostgreSQL on 5433)* |
 | Checkpoint incompatible after code changes | `.\run.ps1 reset` clears the checkpoint volume (with confirmation) |
 | Few frauds visible during a short demo (about 70 in the test split) | Replay order shows realistic bursts; the Test page has "Random fraud" for on-demand alerts; the rate can be raised live |
 | Uncalibrated probabilities (weights/undersampling skew them) | The threshold is tuned on validation for the deployed model; Platt scaling for the SVM. Documented as a limitation. |

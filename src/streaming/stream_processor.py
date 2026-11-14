@@ -33,7 +33,11 @@ from src.common.spark import build_spark_session
 from src.streaming.batch import BatchProcessor
 from src.streaming.listener import ProgressListener
 from src.streaming.threshold import ThresholdProvider
-from src.streaming.transforms import parse_transactions
+from src.streaming.transforms import (
+    observe_input_quality,
+    parse_transactions,
+    score_valid_transactions,
+)
 
 SERVICE = "stream-processor"
 QUERY_NAME = "fraud-scoring"
@@ -148,8 +152,6 @@ def main() -> int:
 
     thresholds = ThresholdProvider(connect, default=active_threshold, logger=logger)
     processor = BatchProcessor(
-        model=model,
-        model_name=meta["model_name"],
         bootstrap_servers=kafka.kafka_bootstrap_servers,
         predictions_topic=kafka.topic_predictions,
         alerts_topic=kafka.topic_fraud_alerts,
@@ -159,7 +161,15 @@ def main() -> int:
     )
 
     query = (
-        build_stream(spark, kafka.kafka_bootstrap_servers, kafka.topic_transactions, settings)
+        score_valid_transactions(
+            observe_input_quality(
+                build_stream(
+                    spark, kafka.kafka_bootstrap_servers, kafka.topic_transactions, settings
+                )
+            ),
+            model,
+            meta["model_name"],
+        )
         .writeStream.queryName(QUERY_NAME)
         .foreachBatch(processor)
         .option("checkpointLocation", str(paths.stream_checkpoint_path))

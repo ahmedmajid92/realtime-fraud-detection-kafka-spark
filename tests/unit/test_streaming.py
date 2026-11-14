@@ -13,7 +13,6 @@ from unittest.mock import MagicMock
 import psycopg
 import pytest
 from pyspark.sql import Row
-from pyspark.sql import functions as F
 
 from src.common.config import get_path_settings, get_streaming_settings
 from src.common.db import PREDICTION_DB_COLUMNS
@@ -30,11 +29,14 @@ from src.streaming import batch as batch_module
 from src.streaming import listener as listener_module
 from src.streaming import sinks, stream_processor, threshold
 from src.streaming.transforms import (
+    INPUT_QUALITY_METRIC,
     apply_threshold,
     enrich,
     is_valid_transaction,
+    observe_input_quality,
     parse_transactions,
     score,
+    score_valid_transactions,
     to_kafka_records,
 )
 from tests.conftest import make_transactions
@@ -376,9 +378,24 @@ class StaticThreshold:
         return self.value
 
 
-def test_batch_processor_fans_out_to_all_sinks(
-    spark, tiny_model, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _scored(spark, model, payloads: list[bytes]):  # type: ignore[no-untyped-def]
+    """What foreachBatch receives: the streaming plan's output for these messages."""
+    parsed = observe_input_quality(parse_transactions(raw_frame(spark, payloads)))
+    return score_valid_transactions(parsed, model, "tiny")
+
+
+def _processor(logger: FakeLogger) -> batch_module.BatchProcessor:
+    return batch_module.BatchProcessor(
+        bootstrap_servers="kafka:9092",
+        predictions_topic="predictions",
+        alerts_topic="fraud-alerts",
+        postgres_connect_kwargs={"host": "pg"},
+        threshold_provider=StaticThreshold(0.5),  # type: ignore[arg-type]
+        logger=logger,
+    )
+
+
+def _capture_sinks(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, list[Row]], list[Row]]:
     kafka_writes: dict[str, list[Row]] = {}
     postgres_writes: list[Row] = []
     monkeypatch.setattr(
@@ -389,52 +406,78 @@ def test_batch_processor_fans_out_to_all_sinks(
     monkeypatch.setattr(
         batch_module, "write_postgres", lambda df, kwargs: postgres_writes.extend(df.collect())
     )
+    return kafka_writes, postgres_writes
+
+
+def test_batch_processor_fans_out_to_all_sinks(
+    spark, tiny_model, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kafka_writes, postgres_writes = _capture_sinks(monkeypatch)
     logger = FakeLogger()
-    processor = batch_module.BatchProcessor(
-        model=tiny_model,
-        model_name="tiny",
-        bootstrap_servers="kafka:9092",
-        predictions_topic="predictions",
-        alerts_topic="fraud-alerts",
-        postgres_connect_kwargs={"host": "pg"},
-        threshold_provider=StaticThreshold(0.5),  # type: ignore[arg-type]
-        logger=logger,
-    )
     payloads = (
         [event_bytes(i) for i in range(3)]
         + [event_bytes(i, frauds=True) for i in range(2)]
         + [b"junk"]
     )
-    processor(parse_transactions(raw_frame(spark, payloads)), 7)
+    _processor(logger)(_scored(spark, tiny_model, payloads), 7)
 
-    assert len(kafka_writes["predictions"]) == 5
+    assert len(kafka_writes["predictions"]) == 5  # the junk row never reaches the sinks
     assert len(postgres_writes) == 5
     alerts = kafka_writes["fraud-alerts"]
     assert alerts and all(row["prediction"] == 1 for row in alerts)
     assert {row["actual_class"] for row in alerts} == {1}
     assert all(row["threshold"] == 0.5 and row["model_name"] == "tiny" for row in postgres_writes)
-    assert logger.events("warning") == ["batch.invalid_rows"]
     processed = next(fields for _, event, fields in logger.records if event == "batch.processed")
     assert processed["rows"] == 5 and processed["batch_id"] == 7
+    assert processed["alerts"] == len(alerts)
 
 
-def test_batch_processor_skips_batches_without_valid_rows(
+def test_batch_processor_handles_batches_without_valid_rows(
     spark, tiny_model, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(batch_module, "write_kafka", lambda *a: pytest.fail("nothing to write"))
     monkeypatch.setattr(batch_module, "write_postgres", lambda *a: pytest.fail("nothing to write"))
-    processor = batch_module.BatchProcessor(
-        model=tiny_model,
-        model_name="tiny",
-        bootstrap_servers="k",
-        predictions_topic="p",
-        alerts_topic="a",
-        postgres_connect_kwargs={},
-        threshold_provider=StaticThreshold(0.5),  # type: ignore[arg-type]
-        logger=FakeLogger(),
+    logger = FakeLogger()
+    _processor(logger)(_scored(spark, tiny_model, [b"junk"]), 1)  # empty batches skip every sink
+    assert logger.events("debug") == ["batch.empty"]
+    assert "batch.processed" not in logger.events()
+
+
+def test_score_valid_transactions_drops_invalid_rows(spark, tiny_model) -> None:
+    scored = _scored(spark, tiny_model, [event_bytes(0), b"junk", event_bytes(Time=float("inf"))])
+    rows = scored.collect()
+    assert len(rows) == 1
+    assert set(scored.columns) == set(PREDICTION_FIELDS) - {"prediction", "threshold"}
+
+
+def test_input_quality_is_observed_in_the_plan(spark) -> None:
+    observed = observe_input_quality(parse_transactions(raw_frame(spark, [event_bytes(0)])))
+    plan = observed._jdf.queryExecution().logical().toString()
+    assert "CollectMetrics" in plan and INPUT_QUALITY_METRIC in plan
+    assert observed.count() == 1  # observing does not change the data
+
+
+def test_invalid_rows_from_observed_metrics() -> None:
+    progress = SimpleNamespace(observedMetrics={INPUT_QUALITY_METRIC: Row(total=5, invalid=2)})
+    assert listener_module.invalid_rows(progress) == 2
+    assert listener_module.invalid_rows(SimpleNamespace(observedMetrics={})) == 0
+    assert listener_module.invalid_rows(SimpleNamespace()) == 0
+    assert (
+        listener_module.invalid_rows(SimpleNamespace(observedMetrics={INPUT_QUALITY_METRIC: {}}))
+        == 0
     )
-    processor(parse_transactions(raw_frame(spark, [b"junk"])), 1)
-    processor(parse_transactions(raw_frame(spark, [b"x"])).filter(F.lit(False)), 2)  # empty batch
+
+
+def test_listener_warns_about_invalid_rows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(listener_module, "insert_stream_progress", lambda conn, record: None)
+    logger = FakeLogger()
+    listener = listener_module.ProgressListener(
+        Heartbeat(tmp_path / "hb"), lambda: FakeConnection(), logger
+    )
+    progress = _progress(observedMetrics={INPUT_QUALITY_METRIC: Row(total=4, invalid=3)})
+    listener.onQueryProgress(SimpleNamespace(progress=progress))
+    warning = next(fields for lvl, event, fields in logger.records if event == "batch.invalid_rows")
+    assert warning == {"batch_id": 3, "dropped": 3}
 
 
 # --------------------------------------------------------------------------- stream processor glue

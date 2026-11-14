@@ -18,6 +18,8 @@ RTL_CSS = """
 [data-testid="stMetricLabel"], [data-testid="stHeading"], label { text-align: right; }
 [data-testid="stPlotlyChart"], [data-testid="stDataFrame"], [data-testid="stDataFrameResizable"],
 [data-testid="stImage"], code, pre { direction: ltr; }
+/* "1,652 ms" must not be reordered to "ms 1,652": numbers with units stay LTR */
+[data-testid="stMetricValue"] { direction: ltr; text-align: right; }
 </style>
 """
 

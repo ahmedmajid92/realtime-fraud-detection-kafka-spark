@@ -24,6 +24,11 @@ MIN_RATE_INPUT = 0.1
 
 
 def render_language_selector() -> str:
+    # A link such as http://localhost:8501/?lang=ar opens the dashboard in Arabic.
+    if res.LANG_KEY not in st.session_state:
+        requested = st.query_params.get("lang")
+        if requested in LANGUAGES:
+            st.session_state[res.LANG_KEY] = requested
     st.sidebar.radio(
         "Language · اللغة",
         options=list(LANGUAGES),

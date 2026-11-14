@@ -12,6 +12,7 @@ from pyspark.sql.streaming import StreamingQueryListener
 
 from src.common.db import insert_stream_progress, prune_predictions, prune_stream_progress
 from src.common.health import Heartbeat
+from src.streaming.transforms import INPUT_QUALITY_METRIC
 
 PRUNE_EVERY_EVENTS = 600
 
@@ -21,6 +22,19 @@ def _finite_or_none(value: Any) -> float | None:
         return None
     value = float(value)
     return value if math.isfinite(value) else None
+
+
+def invalid_rows(progress: Any) -> int:
+    """Rows dropped as invalid in this micro-batch (from the stream's observed metrics)."""
+    observed = getattr(progress, "observedMetrics", None) or {}
+    metric = observed.get(INPUT_QUALITY_METRIC)
+    if metric is None:
+        return 0
+    try:
+        value = metric["invalid"]
+    except (KeyError, TypeError, ValueError):
+        return 0
+    return int(value or 0)
 
 
 def progress_to_record(progress: Any) -> dict[str, Any]:
@@ -76,6 +90,11 @@ class ProgressListener(StreamingQueryListener):
     def onQueryProgress(self, event: Any) -> None:
         self._heartbeat.beat(force=True)
         try:
+            dropped = invalid_rows(event.progress)
+            if dropped:
+                self._logger.warning(
+                    "batch.invalid_rows", batch_id=int(event.progress.batchId), dropped=dropped
+                )
             record = progress_to_record(event.progress)
             if self._conn is None or self._conn.closed:
                 self._conn = self._connect()

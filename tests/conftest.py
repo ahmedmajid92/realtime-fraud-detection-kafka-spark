@@ -32,8 +32,18 @@ def clear_settings_cache() -> None:
 
 
 @pytest.fixture(autouse=True)
-def isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Iterator[dict[str, str]]:
-    """Every test gets fresh settings pointing at its own temporary directories."""
+def isolated_env(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> Iterator[dict[str, str]]:
+    """Every unit test gets fresh settings pointing at its own temporary directories.
+
+    End-to-end tests (``tests/e2e``) are skipped here: they must use the real stack's
+    settings from ``.env``.
+    """
+    if "e2e" in request.node.path.parts:
+        clear_settings_cache()
+        yield {}
+        return
     env = {
         **BASE_ENV,
         "DATA_DIR": str(tmp_path / "data"),
@@ -86,9 +96,14 @@ def spark() -> Iterator[Any]:
 
 
 @pytest.fixture(scope="session")
-def tiny_model(spark: Any) -> Any:
-    """Feature pipeline + logistic regression trained on synthetic data."""
-    from pyspark.ml import Pipeline
+def tiny_model(spark: Any, tmp_path_factory: pytest.TempPathFactory) -> Any:
+    """Feature pipeline + logistic regression trained on synthetic data, saved and reloaded.
+
+    Reloading mirrors production (the stream processor loads the model from disk) and
+    drops the in-memory training summary. That summary references the SparkSession,
+    which is not serializable once an ``Observation`` has been used.
+    """
+    from pyspark.ml import Pipeline, PipelineModel
     from pyspark.ml.classification import LogisticRegression
     from pyspark.sql import functions as F
 
@@ -99,7 +114,10 @@ def tiny_model(spark: Any) -> Any:
     classifier = LogisticRegression(
         featuresCol=FEATURES_COL, labelCol=LABEL_COLUMN, weightCol=WEIGHT_COLUMN, maxIter=50
     )
-    return Pipeline(stages=[*build_feature_pipeline().getStages(), classifier]).fit(frame)
+    fitted = Pipeline(stages=[*build_feature_pipeline().getStages(), classifier]).fit(frame)
+    location = str(tmp_path_factory.mktemp("tiny_model") / "model")
+    fitted.write().overwrite().save(location)
+    return PipelineModel.load(location)
 
 
 def make_fake_metrics() -> dict[str, Any]:

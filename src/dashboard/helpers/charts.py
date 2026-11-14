@@ -374,6 +374,26 @@ def comparison_bars(
                 textposition="outside",
                 textfont={"color": theme.ink_secondary},
                 hovertemplate=f"%{{x}} · {strategy_labels[strategy]}: %{{y:.4f}}<extra></extra>",
+                showlegend=False,
+            )
+        )
+    # Colour encodes the model (the x-axis labels say which). The legend explains only the
+    # pattern, with neutral swatches, so it doesn't borrow one model's colour.
+    for strategy in ("class_weights", "undersampling"):
+        fig.add_trace(
+            go.Bar(
+                x=[None],
+                y=[None],
+                name=strategy_labels[strategy],
+                marker={
+                    "color": theme.muted,
+                    "pattern": {
+                        "shape": STRATEGY_PATTERN[strategy],
+                        "fgcolor": theme.surface,
+                        "solidity": 0.35,
+                    },
+                },
+                hoverinfo="skip",
             )
         )
     fig.update_layout(barmode="group")

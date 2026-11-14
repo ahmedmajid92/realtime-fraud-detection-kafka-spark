@@ -7,8 +7,54 @@
 | 3. Unit testing | ✅ Done: 457 passing, 95.9% coverage | 2026-11-14 |
 | 4. Independent review (Claude Fable 5.2) | ✅ Done: 14 findings (0 Critical, 2 High, 7 Medium, 5 Low) | 2026-11-14 |
 | 5. Apply review findings | ✅ Done: 12 fixed, 1 partly fixed, 1 not reproduced; 487 tests pass | 2026-11-14 |
-| 6. End-to-end Docker test | ⏸ **Waiting for your confirmation that Docker Desktop is running** | |
-| 7. Delivery | ⏳ Not started | |
+| 6. End-to-end Docker test | ✅ Done: 11/11 e2e pass; e2e latency p50 1.7 s / p95 2.6 s at 51 tx/s | 2026-11-14 |
+| 7. Delivery | ⏳ Next | |
+
+---
+
+## Phase 6: End-to-end Docker test
+
+After your go-ahead: `docker compose up -d --build` (via `.un.ps1 up`), health check of every container, the automated e2e suite ([tests/e2e/test_pipeline.py](tests/e2e/test_pipeline.py), run with `.un.ps1 e2e`), dashboard screenshots, and a latency/throughput report.
+
+**Containers:** kafka, postgres, kafka-ui, producer, stream-processor and dashboard are all *running (healthy)*; kafka-init and trainer exited 0 (topics created; training skipped because the model exists). Memory: about **2.6 GB** for the whole stack (stream processor 1.5 / 2 GB, Kafka 0.5 / 1 GB).
+
+**E2E tests: 11/11 pass.**
+
+| # | Test | Checks |
+|---|---|---|
+| 1 | topics exist | 4 topics, partitions 3/3/1/1, `producer-control` is compacted |
+| 2 | producer publishing | `transactions` end offsets grow |
+| 3 | Spark progress | `stream_progress` rows less than 60 s old |
+| 4 | predictions flow | 10 messages on `predictions` validate against `PredictionEvent` and are stored in Postgres |
+| 5 | **known fraud → alert** | a test-split fraud sent with `source=e2e` arrives on `fraud-alerts` with `prediction=1` |
+| 6 | known legit → no alert | stored with `prediction=0` |
+| 7 | threshold reaches Spark | writing 0.777 to `settings` (what the slider does) labels the next transaction with 0.777 |
+| 8 | dashboard HTTP | `/_stcore/health` = `ok`, `/` returns HTML |
+| 9 | Kafka UI HTTP | `/actuator/health` = 200 |
+| 10 | performance report | writes [docs/E2E_REPORT.md](docs/E2E_REPORT.md) |
+| 11 | producer pause / resume | no new messages while paused, and publishing resumes |
+
+**Performance** (last 60 s of replay traffic, quiet machine):
+
+| Metric | Before optimization | **After** |
+|---|---:|---:|
+| Throughput | 51.1 tx/s | **51.0 tx/s** (target 50) |
+| Micro-batch duration (~50–120 rows) | ~2.2 s | **~0.8 s** (steady state) |
+| Processing latency p50 / p95 | 2,516 / 4,037 ms | **578 / 1,198 ms** |
+| **End-to-end latency p50 / p95** (event → stored in Postgres) | 3,322 / 4,904 ms | **1,673 / 2,557 ms** |
+
+**Problems found and fixed in this phase**
+
+1. **Port conflict:** a native PostgreSQL on this machine already listens on 5433. The stack now publishes Postgres on **15432** (`POSTGRES_HOST_PORT`, configurable).
+2. **Latency:** per-step timing showed that the 2.2 s batches were fixed overhead, mostly rebuilding the model pipeline in every `foreachBatch`. Scoring moved into the streaming plan (built once); invalid-row counts became observed metrics; batches are coalesced to one task; separate count/stats jobs were merged. Batches got about 2.7× faster and processing latency about 4× lower.
+3. **Deadlock avoided:** a first attempt used `Observation` for batch statistics. Its metrics are never delivered when the first action is a Kafka write over cached data, so `Observation.get` blocked the query. This was caught live in Docker (the unit test's fake sink didn't trigger it), replaced by one aggregation, and documented in the code.
+4. Test-only: the fixture model kept its training summary, which isn't serializable once an `Observation` exists. The fixture now saves and reloads the model, as production does.
+5. Screenshots: the Playwright image lacks the Python package (installed, pinned 1.64.1); the default page lives at `/`; a **`?lang=ar` URL parameter** opens the dashboard in Arabic.
+6. UI polish seen in the screenshots: neutral legend swatches on the comparison chart; numbers with units stay left-to-right in Arabic mode.
+
+**Screenshots:** [docs/screenshots/](docs/screenshots/) has 5 pages × English/Arabic, including a real flagged fraud on the Test page.
+
+Unit tests after this phase: **491 pass**, coverage 95.9%, `ruff` clean.
 
 ---
 

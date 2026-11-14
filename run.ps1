@@ -194,7 +194,7 @@ function Show-Urls {
     $kafkaUi = Get-EnvValue 'KAFKA_UI_HOST_PORT' '8081'
     $sparkUi = Get-EnvValue 'SPARK_UI_HOST_PORT' '4040'
     $kafka = Get-EnvValue 'KAFKA_EXTERNAL_HOST_PORT' '9094'
-    $pg = Get-EnvValue 'POSTGRES_HOST_PORT' '5433'
+    $pg = Get-EnvValue 'POSTGRES_HOST_PORT' '15432'
     Write-Host ''
     Write-Host '  Dashboard   : ' -NoNewline; Write-Host "http://localhost:$dashboard" -ForegroundColor Green
     Write-Host '  Kafka UI    : ' -NoNewline; Write-Host "http://localhost:$kafkaUi" -ForegroundColor Green

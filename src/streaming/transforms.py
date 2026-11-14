@@ -1,9 +1,15 @@
 """Pure DataFrame transformations of the stream processor.
 
 None of these functions touch Kafka or Postgres, so unit tests run them on small static
-DataFrames. The streaming job chains them inside ``foreachBatch``::
+DataFrames, and the same functions build the streaming plan::
 
-    parse_transactions → filter(is_valid_transaction) → score → enrich → apply_threshold
+    streaming plan (built once):  parse_transactions → observe input quality
+                                  → filter(is_valid_transaction) → score → enrich
+    per micro-batch:              apply_threshold → sinks          (foreachBatch)
+
+Scoring is part of the streaming plan, not ``foreachBatch``. The PipelineModel is
+therefore applied and its tree ensemble broadcast **once**, not re-planned for every
+micro-batch (that cost about 0.5 s per batch).
 """
 
 from __future__ import annotations
@@ -64,6 +70,28 @@ def is_valid_transaction() -> Column:
     condition = condition & (F.col(AMOUNT_COLUMN) >= 0) & (F.col(TIME_COLUMN) >= 0)
     condition = condition & (F.col("actual_class").isNull() | F.col("actual_class").isin(0, 1))
     return condition
+
+
+INPUT_QUALITY_METRIC = "input_quality"
+
+
+def observe_input_quality(parsed: DataFrame) -> DataFrame:
+    """Attach observed metrics (``total``, ``invalid`` rows per micro-batch) to the stream.
+
+    Spark collects them while the batch runs, with no extra job, and reports them in each
+    ``StreamingQueryProgress.observedMetrics`` (logged by the listener).
+    """
+    valid = F.coalesce(is_valid_transaction(), F.lit(False))
+    return parsed.observe(
+        INPUT_QUALITY_METRIC,
+        F.count(F.lit(1)).alias("total"),
+        F.sum((~valid).cast("int")).alias("invalid"),
+    )
+
+
+def score_valid_transactions(parsed: DataFrame, model: PipelineModel, model_name: str) -> DataFrame:
+    """Drop invalid rows, score with the model and add output fields (works on streams)."""
+    return enrich(score(parsed.filter(is_valid_transaction()), model), model_name)
 
 
 def score(transactions: DataFrame, model: PipelineModel) -> DataFrame:

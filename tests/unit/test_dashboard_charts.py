@@ -113,9 +113,13 @@ def test_comparison_bars(fake_metrics: dict[str, Any]) -> None:
     models = {k: k.upper() for k in charts.MODEL_ORDER}
     strategies = {"class_weights": "cw", "undersampling": "us"}
     fig = charts.comparison_bars(fake_metrics, LIGHT, LABELS, models, strategies)
-    assert [trace.name for trace in fig.data] == ["cw", "us"]
-    assert list(fig.data[0].x) == ["LR", "RF", "GBT", "SVM"]
-    assert fig.data[1].marker.pattern.shape == "/"
+    bars = [trace for trace in fig.data if trace.showlegend is False]
+    legend = [trace for trace in fig.data if trace.showlegend is not False]
+    assert [trace.name for trace in legend] == ["cw", "us"]
+    assert {trace.marker.color for trace in legend} == {LIGHT.muted}  # neutral swatches
+    assert list(bars[0].x) == ["LR", "RF", "GBT", "SVM"]
+    assert list(bars[0].marker.color) == list(LIGHT.series)  # colour = model, fixed order
+    assert bars[1].marker.pattern.shape == "/"
 
 
 @pytest.mark.parametrize(("probability", "colour_attr"), [(0.9, "critical"), (0.1, "series")])
