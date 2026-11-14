@@ -12,6 +12,14 @@
 
 ---
 
+## After delivery
+
+- **Architecture diagram, sharper:** the About page used to draw the diagram in the browser (small text, broken Arabic layout). It now shows a high-resolution PNG rendered server-side by Graphviz from one bilingual DOT source (`src/dashboard/helpers/architecture.py`, `scripts/render_architecture.py`, `.un.ps1 diagrams`): five compact rows, two-line labels, and proper Arabic shaping. The same files (`docs/figures/architecture{,-ar}.{png,svg}`) are used by the README and the report. The Mermaid source was retired.
+- **[docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md):** a short explanation of the whole system (theory, how it works, experiments).
+- Unit tests: **538 pass**, coverage 96.0%, `ruff` clean.
+
+---
+
 ## Phase 7: Delivery
 
 - **[README.md](README.md)** (complete): overview and architecture diagram, Windows prerequisites, dataset setup, step-by-step PowerShell commands, train/start/stop/reset, unit and e2e tests, a manual UI test checklist, model results, streaming performance, configuration, project structure, and Windows/Docker troubleshooting.

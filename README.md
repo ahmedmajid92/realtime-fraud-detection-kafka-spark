@@ -8,7 +8,7 @@ A complete streaming system, built for a Big Data course. A Spark MLlib model, t
 |---|---|
 | Deployed model | Random Forest, class weights: **test AUC-PR 0.828** (95% CI 0.750–0.906), precision 0.964, recall 0.757 |
 | Stream | **51 tx/s**, end-to-end latency **p50 1.7 s / p95 2.6 s** (event → stored in PostgreSQL) |
-| Quality | **491 unit tests** (95.9% coverage), **11 end-to-end tests**, independent code review ([REVIEW.md](REVIEW.md)) |
+| Quality | **538 unit tests** (96.0% coverage), **11 end-to-end tests**, independent code review ([REVIEW.md](REVIEW.md)) |
 
 ---
 
@@ -142,7 +142,7 @@ All helper commands:
 | `.\run.ps1 test` | Unit tests plus coverage (in Docker) |
 | `.\run.ps1 e2e` | End-to-end tests against the running stack |
 | `.\run.ps1 screenshots` | Capture every dashboard page (EN + AR) to `docs\screenshots\` |
-| `.\run.ps1 diagrams` | Re-render `docs\figures\architecture.{svg,png}` from the Mermaid source |
+| `.\run.ps1 diagrams` | Re-render `docs\figures\architecture{,-ar}.{svg,png}` (Graphviz; the same diagram as the About page) |
 
 ---
 
@@ -181,7 +181,7 @@ All ports are bound to `127.0.0.1` only (nothing is exposed to your network) and
 .\run.ps1 test
 ```
 
-**491 tests** run in about 3 minutes, inside the Spark image with a local `SparkSession`. Coverage is **95.9%**, and the HTML report is in `reports\coverage\index.html`. Kafka and PostgreSQL are replaced by in-memory fakes. Coverage includes:
+**538 tests** run in about 3 minutes, inside the Spark image with a local `SparkSession`. Coverage is **96.0%**, and the HTML report is in `reports\coverage\index.html`. Kafka and PostgreSQL are replaced by in-memory fakes. Coverage includes:
 - config and message schemas;
 - the exact, group-aware split;
 - feature engineering;
@@ -330,11 +330,11 @@ Every setting lives in **`.env`** (created from [.env.example](.env.example) by 
 │   ├── producer/    replay of the test split, rate limiter, control-topic listener
 │   ├── streaming/   stream_processor.py, transforms, foreachBatch fan-out, sinks, threshold, listener
 │   └── dashboard/   app.py, sidebar, views/ (5 pages), helpers/ (pure, unit-tested logic)
-├── tests/unit/      491 unit tests      tests/e2e/   11 end-to-end tests
+├── tests/unit/      538 unit tests      tests/e2e/   11 end-to-end tests
 ├── docker/          spark.Dockerfile, app.Dockerfile, kafka/create-topics.sh, postgres/init.sql
 ├── docker-compose.yml, .env.example, run.ps1, pyproject.toml, requirements/ (pinned + constraints.txt)
 ├── data/raw/        creditcard.csv (you add it)     models/   trained model + metrics (generated)
-├── docs/            RESULTS.md, E2E_REPORT.md, DEMO_SCRIPT.md, figures/, screenshots/
+├── docs/            SYSTEM_OVERVIEW.md, RESULTS.md, E2E_REPORT.md, DEMO_SCRIPT.md, figures/, screenshots/
 └── PLAN.md · PROGRESS.md · REVIEW.md · README.md
 ```
 
@@ -365,6 +365,7 @@ Every setting lives in **`.env`** (created from [.env.example](.env.example) by 
 
 | Document | Content |
 |---|---|
+| [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) | **Start here:** a short explanation of the whole system: theory, how it works, experiments and results |
 | [PLAN.md](PLAN.md) | Approved design: architecture, message schemas, decisions, versions, risks |
 | [PROGRESS.md](PROGRESS.md) | What was done in each phase, problems found and fixed, measurements |
 | [REVIEW.md](REVIEW.md) | Independent review (Claude Fable 5.2) and the resolution of every finding |

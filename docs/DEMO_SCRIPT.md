@@ -52,7 +52,7 @@ Walk the diagram from left to right:
 
 ## 6. Engineering quality (≈1 min)
 
-**"The project has 491 unit tests at 96% coverage and 11 end-to-end tests that run against the live Docker stack, including one that injects a known fraud and checks that the alert appears on Kafka. An independent AI code review found 14 issues; I fixed or answered every one, for example making the stream processor reject malformed messages and closing a small train/test overlap. I also measured and halved the end-to-end latency: the median is now 1.7 seconds."**
+**"The project has 538 unit tests at 96% coverage and 11 end-to-end tests that run against the live Docker stack, including one that injects a known fraud and checks that the alert appears on Kafka. An independent AI code review found 14 issues; I fixed or answered every one, for example making the stream processor reject malformed messages and closing a small train/test overlap. I also measured and halved the end-to-end latency: the median is now 1.7 seconds."**
 
 ## 7. Arabic interface (≈30 s)
 
