@@ -61,6 +61,15 @@ def test_arabic_strings_are_really_translated() -> None:
         "health.spark",
         "about.comp.spark.name",
         "about.comp.postgres.name",
+        # Kafka topic names, product names and the data format stay in Latin script
+        "arch.csv",
+        "arch.tx",
+        "arch.ctrl",
+        "arch.pred",
+        "arch.alert",
+        "arch.spark",
+        "arch.pg",
+        "arch.e.json",
     }
 
 

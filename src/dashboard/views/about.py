@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from src.dashboard import resources as res
+from src.dashboard.helpers.architecture import architecture_dot
 from src.dashboard.helpers.i18n import t
 
 TECH_STACK = (
@@ -27,11 +28,16 @@ def render() -> None:
     st.markdown(t("about.intro", lang))
 
     st.subheader(t("about.architecture", lang))
-    diagram = res.app_settings().paths.figures_dir / "architecture.png"
-    if diagram.is_file():
-        st.image(str(diagram), width="stretch")
-    else:
-        st.info(t("about.no_diagram", lang), icon="ℹ️")
+    # Pre-rendered high-DPI image (server-side Graphviz with real font shaping, including
+    # Arabic), produced from the same DOT source by `run.ps1 diagrams`. The image's
+    # fullscreen button enlarges it.
+    figures = res.app_settings().paths.figures_dir
+    image = figures / ("architecture-ar.png" if lang == "ar" else "architecture.png")
+    if image.is_file():
+        st.image(str(image), width="stretch")
+    else:  # fallback: render the same DOT source in the browser
+        st.graphviz_chart(architecture_dot(lang), width="stretch")
+    st.caption(t("about.legend", lang))
 
     st.subheader(t("about.components", lang))
     for key in COMPONENT_KEYS:

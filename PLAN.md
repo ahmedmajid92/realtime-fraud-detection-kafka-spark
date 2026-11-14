@@ -35,7 +35,7 @@ un.ps1 download-data` (Kaggle API in a container, used only if `kaggle.json` exi
 | 6 | Storage and infrastructure | **Kafka + PostgreSQL** (the dashboard reads Postgres). **Kafka UI** (`kafbat/kafka-ui`, the maintained fork of provectus). **Spark in local mode**, one container. |
 | 7 | Dashboard | **Streamlit**, **EN/AR toggle** (all strings from one translation dictionary, RTL text in Arabic mode). **5 pages:** Live Monitor, Model Performance, Test a Transaction, System Health, Architecture/About. The **threshold slider drives Spark's alerting** live (shared setting in Postgres). |
 | 8 | Test a Transaction | Sent **through Kafka** (`source = "manual"`); the page waits up to 15 s for its prediction in Postgres. |
-| 9 | Documentation | Mermaid diagrams plus **exported SVG/PNG** (mermaid-cli in Docker). **Automated Playwright screenshots** (EN + AR). **Figures** (PR, ROC, confusion matrix, threshold sweep) and `docs/RESULTS.md` tables. |
+| 9 | Documentation | Mermaid diagrams in the Markdown docs, plus an **architecture figure** (SVG/PNG) rendered with Graphviz from the same source as the dashboard's About page *(changed after Phase 7: the wide Mermaid figure was hard to read)*. **Automated Playwright screenshots** (EN + AR). **Figures** (PR, ROC, confusion matrix, threshold sweep) and `docs/RESULTS.md` tables. |
 
 ---
 
@@ -228,7 +228,7 @@ All logic that isn't UI (KPIs, formatting, SQL builders, control messages, i18n,
 | `tests` | `test` | Unit tests and coverage in the Spark image |
 | `e2e` | `e2e` | End-to-end tests on the Compose network |
 | `screenshots` | `tools` | Playwright captures every page (EN + AR) to `docs/screenshots/` |
-| `diagrams` | `tools` | mermaid-cli renders `docs/figures/architecture.{svg,png}` |
+| `diagrams` | `tools` | Graphviz renders `docs/figures/architecture{,-ar}.{svg,png}` from `src/dashboard/helpers/architecture.py` |
 | `downloader` | `tools` | Optional Kaggle API download (mounts `~/.kaggle` read-only) |
 
 ---
@@ -319,7 +319,7 @@ Versions were checked on Docker Hub, PyPI and Maven Central on 2026-11-14. Patch
 | ML reporting | `scikit-learn`, `matplotlib` | pinned in Phase 2 |
 | Tests | `pytest` / `pytest-cov` | 9.x / 7.1.0 |
 | Screenshots | Playwright (Python) + its official image | matching versions, pinned in Phase 2 |
-| Diagrams | `minlag/mermaid-cli` | pinned in Phase 2 |
+| Diagrams | Graphviz (Debian bookworm package) in `python:3.12.15-slim-bookworm`; in the browser, Streamlit's built-in Graphviz WASM renderer | — |
 
 **Images built** from two Dockerfiles. Compose names them `fraud-detection-<service>`; services that share a Dockerfile reuse the same cached layers. *(Changed during Phase 2: an explicit shared tag such as `fraud-spark:1.0.0` made parallel builds collide.)*
 - `docker/spark.Dockerfile` ("fraud-spark"): Python 3.12, Temurin 17, PySpark, connector jars and ML deps. Used by `trainer`, `stream-processor`, `tests` and `e2e` (target `test`).
@@ -378,7 +378,7 @@ realtime-fraud-detection-kafka-spark/
 │   └── processed/                      # train/val/test parquet (git-ignored)
 ├── models/                             # best_model/, metrics.json, demo_samples.json (git-ignored)
 ├── docs/
-│   ├── figures/                        # architecture.mmd/.svg/.png, PR/ROC/CM/sweep PNGs
+│   ├── figures/                        # architecture{,-ar}.dot/.svg/.png, PR/ROC/CM/sweep PNGs
 │   ├── screenshots/                    # Playwright output
 │   └── RESULTS.md                      # generated results tables
 ├── docker/

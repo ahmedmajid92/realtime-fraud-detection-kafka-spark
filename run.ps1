@@ -14,7 +14,7 @@
     .\run.ps1 logs [service]   Follow logs (all services or one)
     .\run.ps1 status           Show container status / health
     .\run.ps1 screenshots      Capture dashboard screenshots to docs\screenshots
-    .\run.ps1 diagrams         Render docs\figures\architecture.mmd to SVG/PNG
+    .\run.ps1 diagrams         Render the architecture diagram (EN/AR) to docs\figures (Graphviz)
 
 .EXAMPLE
     .\run.ps1 setup

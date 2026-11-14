@@ -1,0 +1,51 @@
+digraph architecture {
+  graph [rankdir=TB, bgcolor="white", nodesep=0.45, ranksep=0.65, pad=0.25, newrank=true, fontname="Helvetica"];
+  node [fontname="Helvetica", margin="0.18,0.10", penwidth=1.6, color="#898781"];
+  edge [fontname="Helvetica", fontsize=11, color="#898781", fontcolor="#898781", arrowsize=0.8, penwidth=1.4];
+  csv [shape=cylinder, style=filled, fillcolor="#f3f2ef", color="#898781", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>creditcard.csv</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">Kaggle</FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">‏284,807 معاملة</FONT></TD></TR></TABLE>>];
+  prep [shape=box, style="rounded,filled", fillcolor="#e7f0fc", color="#2a78d6", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>تجهيز البيانات</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">إزالة التكرار</FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">تقسيم طبقي 70/15/15</FONT></TD></TR></TABLE>>];
+  train [shape=box, style="rounded,filled", fillcolor="#e7f0fc", color="#2a78d6", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>التدريب والاختيار (Spark MLlib)</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">LR · RF · GBT · SVM</FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">× أوزان الفئات / تقليل العينات</FONT></TD></TR></TABLE>>];
+  model [shape=cylinder, style=filled, fillcolor="#f3f2ef", color="#898781", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>النموذج المحفوظ</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">PipelineModel</FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">+ العتبة المُعايَرة</FONT></TD></TR></TABLE>>];
+  test [shape=cylinder, style=filled, fillcolor="#f3f2ef", color="#898781", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>مجموعة الاختبار</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">محجوزة ولم يُدرَّب عليها</FONT></TD></TR></TABLE>>];
+  producer [shape=box, style="rounded,filled", fillcolor="#e2f5ee", color="#1baf7a", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>المنتِج</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">يعيد بث مجموعة الاختبار</FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">50 معاملة/ث</FONT></TD></TR></TABLE>>];
+  tx [shape=box, style="rounded,filled", fillcolor="#fdeee6", color="#eb6834", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>transactions</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">موضوع Kafka · ‏3 أقسام</FONT></TD></TR></TABLE>>];
+  spark [shape=box, style="rounded,filled", fillcolor="#e2f5ee", color="#1baf7a", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>Spark Structured Streaming</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">تحليل ← تحقق ← تقييم ← تصنيف</FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">دفعات كل ثانية</FONT></TD></TR></TABLE>>];
+  ctrl [shape=box, style="rounded,filled", fillcolor="#fdeee6", color="#eb6834", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>producer-control</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">موضوع Kafka · مضغوط</FONT></TD></TR></TABLE>>];
+  pred [shape=box, style="rounded,filled", fillcolor="#fdeee6", color="#eb6834", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>predictions</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">موضوع Kafka · ‏3 أقسام</FONT></TD></TR></TABLE>>];
+  alert [shape=box, style="rounded,filled", fillcolor="#fdeee6", color="#eb6834", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>fraud-alerts</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">موضوع Kafka · قسم واحد</FONT></TD></TR></TABLE>>];
+  pg [shape=cylinder, style=filled, fillcolor="#f3f2ef", color="#898781", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>PostgreSQL</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">التنبؤات · العتبة</FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">تقدم البث</FONT></TD></TR></TABLE>>];
+  kui [shape=box, style="rounded,filled", fillcolor="#fdf4dc", color="#c98500", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>واجهة Kafka</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">للقراءة فقط</FONT></TD></TR></TABLE>>];
+  dash [shape=box, style="rounded,filled", fillcolor="#fdf4dc", color="#c98500", label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2"><TR><TD><FONT POINT-SIZE="16" COLOR="#0b0b0b"><B>لوحة Streamlit</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="12" COLOR="#52514e">English / العربية</FONT></TD></TR></TABLE>>];
+  { rank=same; csv; prep; train; }
+  csv -> prep [style=invis, weight=4];
+  prep -> train [style=invis, weight=4];
+  { rank=same; test; model; }
+  test -> model [style=invis, weight=4];
+  { rank=same; producer; tx; spark; }
+  producer -> tx [style=invis, weight=4];
+  tx -> spark [style=invis, weight=4];
+  { rank=same; ctrl; pred; alert; pg; }
+  ctrl -> pred [style=invis, weight=4];
+  pred -> alert [style=invis, weight=4];
+  alert -> pg [style=invis, weight=4];
+  { rank=same; kui; dash; }
+  kui -> dash [style=invis, weight=4];
+  csv -> prep [];
+  prep -> train [label="  بيانات التدريب  "];
+  train -> model [label="  أفضل نموذج  "];
+  prep -> test [label="  محجوزة  "];
+  test -> producer [];
+  producer -> tx [label="  JSON  "];
+  tx -> spark [];
+  model -> spark [label="  يُحمَّل مرة واحدة  "];
+  spark -> pred [label="  كل السجلات  "];
+  spark -> alert [label="  الدرجة ≥ العتبة  "];
+  spark -> pg [label="  إدراج دون تكرار  "];
+  pg -> dash [label="  استعلامات SQL  "];
+  dash -> pg [label="  منزلق العتبة  ", style=dashed, constraint=false];
+  pg -> spark [label="  العتبة (كل دفعة)  ", style=dashed, constraint=false];
+  dash -> ctrl [label="  إيقاف · استئناف · معدل  ", style=dashed, constraint=false];
+  ctrl -> producer [style=dashed, constraint=false];
+  dash -> tx [label="  اختبار يدوي  ", style=dashed, constraint=false];
+  kui -> pred [label="  تصفح المواضيع  ", style=dashed, constraint=false];
+}

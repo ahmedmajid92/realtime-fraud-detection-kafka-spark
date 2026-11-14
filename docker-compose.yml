@@ -281,14 +281,22 @@ services:
 
   diagrams:
     profiles: ["tools"]
-    image: minlag/mermaid-cli:12.0.0
+    # Graphviz renders the same DOT source the dashboard's About page uses.
+    image: python:3.12.15-slim-bookworm
+    working_dir: /work
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        mmdc -p /puppeteer-config.json -i /data/architecture.mmd -o /data/architecture.svg -b white &&
-        mmdc -p /puppeteer-config.json -i /data/architecture.mmd -o /data/architecture.png -b white --size 2400 -s 2
+        apt-get update -qq &&
+        apt-get install -y -qq --no-install-recommends graphviz fonts-dejavu-core fonts-noto-core > /dev/null &&
+        python /work/scripts/render_architecture.py
+    environment:
+      PYTHONPATH: /work
+      DIAGRAM_DIR: /work/out
     volumes:
-      - ./docs/figures:/data
+      - ./src:/work/src:ro
+      - ./scripts:/work/scripts:ro
+      - ./docs/figures:/work/out
     logging: *default-logging
 
   downloader:
