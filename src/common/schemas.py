@@ -42,6 +42,11 @@ FEATURE_COLUMNS: tuple[str, ...] = (*V_COLUMNS, *ENGINEERED_COLUMNS)
 MAX_PRODUCER_RATE = 1000.0
 """Upper bound (transactions/second) accepted by the producer and the dashboard."""
 
+THRESHOLD_MIN = 0.001
+THRESHOLD_MAX = 0.999
+"""Range for alert thresholds everywhere (tuning, override, dashboard slider), so a tuned
+or configured value can always be shown on the slider."""
+
 CONTROL_MESSAGE_KEY = b"producer"
 """Key of every message on the compacted ``producer-control`` topic."""
 

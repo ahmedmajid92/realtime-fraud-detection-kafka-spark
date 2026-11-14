@@ -35,3 +35,6 @@ desktop.ini
 .idea/
 .vscode/
 .claude/settings.local.json
+
+# ---- Kaggle API token (optional download helper) ----
+.kaggle/

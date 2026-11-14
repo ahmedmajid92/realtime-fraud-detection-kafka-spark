@@ -18,6 +18,7 @@ def producer_config(bootstrap_servers: str, client_id: str, **overrides: Any) ->
         "acks": "all",
         "enable.idempotence": True,
         "linger.ms": 10,
+        "compression.type": "lz4",
         "message.timeout.ms": 30_000,
     }
     config.update(overrides)

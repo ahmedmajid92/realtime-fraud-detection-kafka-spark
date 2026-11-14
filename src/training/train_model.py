@@ -225,6 +225,7 @@ def evaluate_combination(
                 }
             ),
             "confusion": {k: test_at_t[k] for k in ("tp", "fp", "tn", "fn")},
+            "ci95": evaluate.bootstrap_ci(y_test, p_test, threshold),
         },
     }
     return row, evaluate.curve_points(y_test, p_test), scored_test
@@ -282,6 +283,11 @@ def run_training(spark: SparkSession, paths: PathSettings, cfg: TrainingSettings
     )
 
     splits = data_prep.stratified_split(deduplicated, SPLIT_WEIGHTS, seed=cfg.random_seed)
+    assert splits.assigned is not None
+    twins = data_prep.feature_twin_stats(splits.assigned)
+    if twins["groups_spanning_splits"]:
+        raise RuntimeError(f"feature twins straddle splits: {twins}")  # would be leakage
+    logger.info("training.feature_twins", **twins)
     train = splits.train.persist(StorageLevel.MEMORY_AND_DISK)
     val = splits.val.persist(StorageLevel.MEMORY_AND_DISK)
     test = splits.test.persist(StorageLevel.MEMORY_AND_DISK)
@@ -340,6 +346,7 @@ def run_training(spark: SparkSession, paths: PathSettings, cfg: TrainingSettings
             "frauds_raw": raw_stats.frauds,
             "duplicates_removed": duplicates,
             **clean_stats.to_dict(),
+            **twins,
         },
         "splits": {k: v.to_dict() for k, v in split_stats.items()},
         "candidates": [c.summary() for c in candidates],

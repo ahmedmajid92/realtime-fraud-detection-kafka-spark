@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Status | **Draft, awaiting approval** (end of Phase 1) |
+| Status | **Approved** 2026-11-14 · kept up to date with changes made during implementation and review (marked *Changed during Phase N*) |
 | Date | 2026-11-14 |
 | Target host | Windows 11 + Docker Desktop (WSL2). Whole stack ≤ ~6 GB RAM |
 | Start command | `docker compose up` (trains the model automatically on first run) |
@@ -27,7 +27,8 @@ An end-to-end system that:
 | # | Topic | Decision |
 |---|---|---|
 | 1 | Environment | Windows 11 Pro, 32 GB RAM, Docker Desktop 28.5 (WSL2). Memory limits are set for an **8–16 GB laptop (~6 GB stack budget)**. **All tests run in Docker** (the host's Java 24 and Python 3.13 don't suit PySpark). **Git:** `git init`, one commit per phase, never pushed. |
-| 2 | Dataset | Manual Kaggle download to `data/raw/creditcard.csv`, plus an optional `.un.ps1 download-data` (Kaggle API in a container, used only if `kaggle.json` exists). **Exact duplicates are removed before splitting** (prevents train/test leakage). **Exact stratified 70/15/15 train/validation/test split** (seed 42). |
+| 2 | Dataset | Manual Kaggle download to `data/raw/creditcard.csv`, plus an optional `.
+un.ps1 download-data` (Kaggle API in a container, used only if `kaggle.json` exists). **Exact duplicates are removed before splitting** (prevents train/test leakage). **Exact stratified 70/15/15 train/validation/test split** (seed 42). |
 | 3 | Models and imbalance | **LR, RF, GBT, LinearSVC**, each trained with **class weights** and with **undersampling** (1 fraud : 10 legit, train split only). **Small grid** of 2 configs per model, so 16 fits. Features: V1–V28, `log1p(Amount)`, **hour-of-day** (as sin/cos) from `Time`; raw `Time` is dropped. |
 | 4 | Metric and threshold | The best model is chosen by **validation AUC-PR**. The default alert threshold maximizes **F1 on validation**. The **test split is used once**, for final reporting. ROC-AUC, precision, recall, F1 and the confusion matrix are reported for every model. |
 | 5 | Streaming | **50 tx/s** default, **loops forever**, **original `Time` order**. **Live producer control** from the dashboard (pause/resume/rate) via a `producer-control` topic. |
@@ -111,12 +112,12 @@ sequenceDiagram
 
 ### 4.1 Trainer (offline batch, Spark MLlib)
 
-Entry point is `src/training/train_model.py`, run with `spark-submit` in the `trainer` service.
+Entry point is `src/training/train_model.py`, run as `python -m src.training.train_model` in the `trainer` service (PySpark starts the JVM itself).
 
 - **Modes:** under `docker compose up` it runs in *train-if-missing* mode: it exits immediately if `models/best_model/` and `models/metrics.json` already exist. `.\run.ps1 train` forces a retrain.
 - **Load:** reads the CSV with an explicit schema. If the file is missing, it stops with a clear message that includes the Kaggle link and the expected path. It validates the column names and that `Class` is in {0, 1}.
 - **Clean:** drops exact duplicate rows (about 1,081) **before** splitting, and logs the count.
-- **Split:** **exact** stratified 70/15/15. *(Changed during Phase 2: per-class `randomSplit` gave 321/89/63 frauds instead of about 331/71/71.)* Within each class, rows are ranked by a seeded content hash `xxhash64(seed, row)` and cut at 70% and 85%. Every split therefore has the same fraud ratio, and the split is reproducible whatever order Spark reads the rows in. The splits are saved to `data/processed/{train,val,test}.parquet`, with test sorted by `Time` for replay.
+- **Split:** **exact** stratified 70/15/15. *(Changed during Phase 2: per-class `randomSplit` gave 321/89/63 frauds instead of about 331/71/71.)* Within each class, rows are ranked by a seeded hash of the **model inputs** `xxhash64(seed, V1..V28, Amount)` and cut at 70% and 85%. *(Changed during Phase 5, review R3: rows that differ only in `Time`, about 12k "feature twins", now always land in the same split, so no feature vector is trained on and then tested.)* Every split has the same fraud ratio, and the split is reproducible whatever order Spark reads the rows in. The splits are saved to `data/processed/{train,val,test}.parquet`, with test sorted by `Time` for replay.
 - **Feature pipeline:** fitted on **train only** and stored inside the `PipelineModel`, so streaming applies exactly the same transforms (no train/serve skew):
   `SQLTransformer` (`log_amount = log1p(Amount)`, `hour_sin` / `hour_cos` from `(Time/3600) mod 24`) → `VectorAssembler(V1..V28, log_amount, hour_sin, hour_cos)` → `StandardScaler(withMean, withStd)` → classifier.
   The feature list is one constant (`FEATURE_COLUMNS` in `src/common/schemas.py`); **`Class` is never a feature**, and a unit test asserts this.
@@ -188,7 +189,7 @@ Entry point is `src/training/train_model.py`, run with `spark-submit` in the `tr
 - **Delivery semantics:** at-least-once to Kafka; **effectively-once in Postgres** (idempotent upsert), which is what the dashboard reads.
 - **`StreamingQueryListener`:** on each progress event it touches a heartbeat file (for the healthcheck) and inserts a row into `stream_progress` (input rate, processing rate, batch duration, end offsets) for the System Health page.
 - **Startup:** waits for Kafka and Postgres, checks that the model exists (otherwise exits with "run `.\run.ps1 train`"), and seeds `settings.alert_threshold` from `metrics.json` if it's absent.
-- **Shutdown:** on SIGTERM, `query.stop()` (lets the current batch finish) and then `spark.stop()`.
+- **Shutdown:** on SIGTERM, `query.stop()` and then `spark.stop()`. `query.stop()` interrupts a running batch; on restart the checkpoint replays it, and the idempotent Postgres upsert makes that safe (Kafka outputs are at-least-once).
 
 ### 4.5 PostgreSQL 17 (`docker/postgres/init.sql`)
 
@@ -201,7 +202,7 @@ Entry point is `src/training/train_model.py`, run with `spark-submit` in the `tr
 
 ### 4.6 Dashboard (Streamlit + Plotly)
 
-`st.navigation` provides 5 pages with translatable titles. The **sidebar** has the language toggle (English / العربية), the **alert threshold slider** (0.01–0.99, plus a "reset to model default" button), and **producer controls** (pause / resume / rate). Live panels use `st.fragment(run_every="2s")`, so only they refresh.
+`st.navigation` provides 5 pages with translatable titles. The **sidebar** has the language toggle (English / العربية), the **alert threshold slider** (0.001–0.999, the same range tuning and `ALERT_THRESHOLD_OVERRIDE` use; it follows the shared value in Postgres; plus a "reset to model default" button), and **producer controls** (pause / resume / rate). Live panels use `st.fragment(run_every="2s")`, so only they refresh.
 
 | Page | Content |
 |---|---|
@@ -277,7 +278,7 @@ Defined once in `src/common/schemas.py` as **pydantic models** (producer, dashbo
 `command` ∈ {`pause`, `resume`, `set_rate`}. *(Changed during Phase 2.)* Every message carries the **full desired state** (`paused` + `rate`), not only the change. Log compaction keeps just the latest message per key, so a lone `set_rate` must not erase an earlier `pause`.
 
 **Latency definitions**
-- *Processing latency* (in each prediction): `processed_at − event_time`. This covers Kafka queueing, the trigger wait and model scoring.
+- *Processing latency* (in each prediction): `processed_at − event_time`, where `processed_at` is fixed when the micro-batch starts executing. It covers Kafka queueing and the trigger wait, but not model inference or the sink writes.
 - *End-to-end latency* (reported by the e2e test and dashboard): `stored_at − event_time`, i.e. until the result is visible in Postgres.
 
 All containers share the Docker Desktop VM clock, so there is no cross-host clock skew.
@@ -393,7 +394,7 @@ realtime-fraud-detection-kafka-spark/
 │       ├── app.py, sidebar.py, resources.py  # (Streamlit glue)
 │       ├── views/                      # live_monitor, model_performance, test_transaction, system_health, about
 │       │                               # (not "pages/": that name triggers Streamlit's legacy auto-multipage mode)
-│       └── helpers/                    # kpis.py, formatting.py, queries.py, i18n.py, control.py, samples.py
+│       └── helpers/                    # kpis.py, formatting.py, queries.py, i18n.py, kafka_io.py, samples.py, charts.py, metrics_file.py, thresholds.py
 ├── tests/
 │   ├── conftest.py                     # local SparkSession fixture, sample rows
 │   ├── unit/
@@ -453,7 +454,7 @@ realtime-fraud-detection-kafka-spark/
 | Validation used for both Platt fitting and threshold tuning (SVM case) | Slightly optimistic threshold; the test set stays untouched, and this is documented in RESULTS.md |
 | Arabic RTL in Streamlit is partial | RTL applied to text containers; charts and tables stay LTR; fonts fall back to system Arabic fonts |
 | Build needs internet (images, pip, Maven) | Only at build time; after that the stack runs offline |
-| Postgres grows while looping forever (≈180k rows/hour) | Indexed time-window queries; `reset` wipes the data; fine for demo-length runs |
+| Postgres grows while looping forever (≈180k rows/hour) | *(Phase 5, R8)* predictions older than `PREDICTIONS_RETENTION_HOURS` (default 6) are pruned; Kafka topics have `retention.bytes` caps and lz4 compression |
 
 ---
 

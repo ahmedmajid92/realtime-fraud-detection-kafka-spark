@@ -48,6 +48,9 @@ INSERT_PROGRESS_SQL = (
 )
 
 PRUNE_PROGRESS_SQL = "DELETE FROM stream_progress WHERE recorded_at < now() - %s::interval"
+PRUNE_PREDICTIONS_SQL = (
+    "DELETE FROM predictions WHERE processed_at < now() - make_interval(secs => %s)"
+)
 
 UPSERT_SETTING_SQL = (
     "INSERT INTO settings (key, value, updated_at) VALUES (%s, %s, now()) "
@@ -185,3 +188,13 @@ def insert_stream_progress(conn: psycopg.Connection[Any], record: Mapping[str, A
 def prune_stream_progress(conn: psycopg.Connection[Any], keep: str = "1 hour") -> None:
     """Delete progress rows older than ``keep`` (a Postgres interval string)."""
     conn.execute(PRUNE_PROGRESS_SQL, (keep,))
+
+
+def prune_predictions(conn: psycopg.Connection[Any], keep_hours: float) -> int:
+    """Delete predictions older than ``keep_hours``; returns the number of rows removed.
+
+    Bounds table growth while the producer loops forever (~180k rows/hour at 50 tx/s),
+    so dashboard queries stay fast. Dashboard totals cover this retention window.
+    """
+    cursor = conn.execute(PRUNE_PREDICTIONS_SQL, (float(keep_hours) * 3600.0,))
+    return int(getattr(cursor, "rowcount", 0) or 0)

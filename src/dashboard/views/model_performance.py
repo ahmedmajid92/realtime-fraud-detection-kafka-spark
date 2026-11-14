@@ -39,6 +39,7 @@ def render() -> None:
     cols[4].metric(t("metric.f1", lang), f"{test['f1']:.4f}")
     cols[5].metric(t("metric.threshold", lang), f"{best['threshold']:.4f}")
     st.caption(t("perf.selection_note", lang))
+    st.caption(t("common.score_note", lang))
 
     st.subheader(t("perf.comparison", lang))
     table = metrics_file.comparison_frame(metrics, lang)

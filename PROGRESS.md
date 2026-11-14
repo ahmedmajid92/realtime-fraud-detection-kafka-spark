@@ -5,10 +5,41 @@
 | 1. Planning | ✅ Done, plan approved | 2026-11-14 |
 | 2. Implementation | ✅ Done, model trained | 2026-11-14 |
 | 3. Unit testing | ✅ Done: 457 passing, 95.9% coverage | 2026-11-14 |
-| 4. Independent review (Claude Fable 5.2) | ⏳ Next | |
-| 5. Apply review findings | ⏳ Not started | |
-| 6. End-to-end Docker test | ⏳ Not started (needs your go-ahead) | |
+| 4. Independent review (Claude Fable 5.2) | ✅ Done: 14 findings (0 Critical, 2 High, 7 Medium, 5 Low) | 2026-11-14 |
+| 5. Apply review findings | ✅ Done: 12 fixed, 1 partly fixed, 1 not reproduced; 487 tests pass | 2026-11-14 |
+| 6. End-to-end Docker test | ⏸ **Waiting for your confirmation that Docker Desktop is running** | |
 | 7. Delivery | ⏳ Not started | |
+
+---
+
+## Phase 4: Independent review
+
+A `code-reviewer` subagent ([.claude/agents/code-reviewer.md](.claude/agents/code-reviewer.md), model **`claude-fable-5-2`**, read-only tools plus `Write` for `REVIEW.md` only) reviewed the whole repository against the brief's checklist. Agent definitions are loaded when a session starts, so this session ran a Fable 5.2 agent with the same instructions; in later sessions you can call `code-reviewer` directly. Findings: **0 Critical, 2 High, 7 Medium, 5 Low**. No direct label leakage was found, and model selection and threshold tuning never read the test split. Full report: [REVIEW.md](REVIEW.md).
+
+## Phase 5: Apply review findings
+
+Every finding was checked against the code. The four the reviewer could not quantify were measured first (R2, R3 on the real data; R7, R13 with Streamlit's `AppTest`). The outcome of each is recorded in [REVIEW.md](REVIEW.md#resolution-phase-5):
+
+- **Fixed (12):** R1 poison-pill validation (UUID, ±Infinity, `replay_pass`); R3 group-aware split (4.2% of test rows had a feature twin in train/val, now 0); R4 retrain recreates producer and stream processor; R6 "fraud score" labels and calibration note; R7 dashboard uses Spark's threshold, unrounded, safe slider range (an out-of-range value used to crash every page); R8 retention (6 h), topic size caps, lz4; R9 new tests; R10 latency definition; R11 unknown control state, wait for retained state, listener reconnect; R12 least-privilege env and `.kaggle/` ignored; R13 rate input range; R14 doc corrections.
+- **Partly fixed (1):** R5. Bootstrap 95% confidence intervals added everywhere; k-fold CV deferred, because it conflicts with the 70/15/15 design you chose and would take about 5× longer to train.
+- **Not reproduced (1):** R2. Measured: no saturated scores; AUC-PR is identical on `probability` and `rawPrediction`. Found along the way and fixed: the exact split had left training data in 2 Spark partitions (nearly single-threaded training).
+
+**Verification:** `ruff` clean · **487 unit tests pass** · coverage **95.9%** · model retrained (7.6 min).
+
+### Current model results (test split: 42,557 transactions, 70 frauds)
+
+| Model | Imbalance | Val AUC-PR | **Test AUC-PR** | Test AP 95% CI | Precision | Recall | F1 | Threshold | TP/FP/FN |
+|---|---|---:|---:|:---:|---:|---:|---:|---:|---:|
+| Logistic Regression | class weights | 0.7637 | 0.7151 | 0.608–0.828 | 0.754 | 0.743 | 0.748 | 0.958 | 52/17/18 |
+| Logistic Regression | undersampling | 0.8077 | 0.7375 | 0.625–0.846 | 0.825 | 0.743 | 0.782 | 0.982 | 52/11/18 |
+| **Random Forest ★** | **class weights** | **0.8780** | **0.8283** | **0.750–0.906** | 0.964 | 0.757 | 0.848 | 0.480 | 53/2/17 |
+| Random Forest | undersampling | 0.8328 | 0.7603 | 0.646–0.869 | 0.900 | 0.643 | 0.750 | 0.910 | 45/5/25 |
+| Gradient-Boosted Trees | class weights | 0.7903 | 0.6941 | 0.584–0.803 | 0.906 | 0.686 | 0.780 | 0.972 | 48/5/22 |
+| Gradient-Boosted Trees | undersampling | 0.5886 | 0.5442 | 0.446–0.702 | 0.732 | 0.743 | 0.738 | 0.977 | 52/19/18 |
+| Linear SVM (Platt) | class weights | 0.7035 | 0.6779 | 0.567–0.795 | 0.804 | 0.586 | 0.678 | 0.169 | 41/10/29 |
+| Linear SVM (Platt) | undersampling | 0.8519 | 0.7553 | 0.647–0.863 | 0.897 | 0.743 | 0.812 | 0.144 | 52/6/18 |
+
+**Deployed:** Random Forest with class weights (`maxDepth=12`), threshold **0.4797**. It catches 53 of 70 test frauds with **2 false alarms** among 42,487 legitimate transactions. The next-best models' intervals overlap RF's, so the ranking among the top three is not statistically conclusive; RESULTS.md says so.
 
 ---
 
@@ -58,6 +89,8 @@ Run with `.\run.ps1 test` (pytest in the `fraud-spark` test image, with a local 
 
 ### Model results (test split, 70 frauds out of 42,557 transactions)
 
+> **Superseded** by the Phase 5 retrain (group-aware split). See *Phase 5* above for the current numbers.
+
 Selection uses validation AUC-PR. Each row's threshold maximises F1 on validation.
 
 | Model | Imbalance | Val AUC-PR | **Test AUC-PR** | Test ROC-AUC | Precision | Recall | F1 | Threshold | TP/FP/FN |
@@ -76,7 +109,7 @@ Selection uses validation AUC-PR. Each row's threshold maximises F1 on validatio
 Observations for the report:
 - ROC-AUC barely separates the models (0.976–0.993), while AUC-PR ranges from 0.42 to 0.84. That's the practical case for AUC-PR on data with 0.17% fraud.
 - Class weights vs undersampling depends on the model. Undersampling slightly helps the linear models (LR, SVM) and clearly hurts the tree ensembles, which lose 99% of the legitimate examples.
-- GBT is unstable between validation and test (0.48 vs 0.77 AUC-PR). Its probabilities saturate near 1, which creates many tied scores, and each split has only about 70 frauds. Small-sample variance also explains why the selected RF scores higher on test (0.84) than on validation (0.80).
+- GBT is unstable between validation and test (0.48 vs 0.77 AUC-PR). *(Corrected in Phase 5: an earlier version of this note blamed probability saturation and tied scores. Measured on the real splits, no score equals 1.0, and AUC-PR is identical on `probability` and `rawPrediction`. The instability is GBT's sensitivity to the data partitioning used when it bins features, combined with only about 70 frauds per split.)* Small-sample variance also explains why the selected RF scores higher on test (0.84) than on validation (0.80).
 
 ### Problems found and fixed during Phase 2
 

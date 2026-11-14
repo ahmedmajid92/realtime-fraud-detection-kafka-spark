@@ -119,9 +119,22 @@ def consumer_lag(
     return lag
 
 
+CONTROL_UNKNOWN: dict[str, str] = {"status": "unknown"}
+"""Marker returned when the control topic could not be read (distinct from "never set")."""
+
+
+def control_known(last: Mapping[str, Any] | None) -> bool:
+    """False when the last control read failed, so the UI must not assume defaults."""
+    return not (last is not None and last.get("status") == "unknown")
+
+
 def commanded_state(last: Mapping[str, Any] | None, default_rate: float) -> tuple[bool, float]:
-    """``(paused, rate)`` from the last producer-control message, or the start-up defaults."""
-    if not last:
+    """``(paused, rate)`` from the last producer-control message, or the start-up defaults.
+
+    Callers must check :func:`control_known` first: for an unknown state this returns the
+    defaults, which are only safe to *display* (marked unknown), never to build a command.
+    """
+    if not last or not control_known(last):
         return False, float(default_rate)
     return bool(last.get("paused", False)), float(last.get("rate", default_rate))
 

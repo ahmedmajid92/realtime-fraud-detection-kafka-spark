@@ -232,13 +232,22 @@ function Invoke-DownloadData {
 function Invoke-Train {
     Assert-Docker; Assert-EnvFile
     [void](Test-Dataset -Required)
-    Write-Step 'Training (4 models x 2 imbalance strategies; about 10-15 min)'
+    # The producer keeps the test split in memory and the stream processor keeps the model.
+    # Stop both first (this also frees memory for the 3 GB trainer) and recreate them after
+    # training, so neither can keep replaying or scoring with stale artifacts.
+    $states = Get-ServiceStates
+    $streamingServices = @('producer', 'stream-processor')
+    $wasRunning = @($streamingServices | Where-Object { $states[$_] -and $states[$_].State -eq 'running' })
+    if ($wasRunning.Count -gt 0) {
+        Write-Step "Stopping $($wasRunning -join ', ') during training"
+        Invoke-Compose (@('stop') + $wasRunning)
+    }
+    Write-Step 'Training (4 models x 2 imbalance strategies; about 10 min)'
     Invoke-Compose @('run', '--rm', '--build', 'trainer', 'python', '-m', 'src.training.train_model', '--force')
     Write-Ok 'Model saved to models\ (results: docs\RESULTS.md, figures: docs\figures\)'
-    $states = Get-ServiceStates
-    if ($states['stream-processor'] -and $states['stream-processor'].State -eq 'running') {
-        Write-Step 'Restarting the stream processor so it loads the new model'
-        Invoke-Compose @('restart', 'stream-processor')
+    if ($wasRunning.Count -gt 0) {
+        Write-Step 'Recreating the producer and stream processor with the new model and test split'
+        Invoke-Compose (@('up', '-d', '--force-recreate', '--no-deps') + $streamingServices)
     }
 }
 

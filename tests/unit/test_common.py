@@ -247,3 +247,27 @@ def test_logging_emits_json_with_service(monkeypatch: pytest.MonkeyPatch) -> Non
     assert record["service"] == "unit-test"
     assert record["module"] == "tests.module"
     assert all("hidden" not in line for line in lines)
+
+
+def test_producer_config_compresses() -> None:
+    assert kafka_utils.producer_config("k:9092", "c")["compression.type"] == "lz4"
+
+
+def test_prune_predictions_uses_retention_hours() -> None:
+    conn = FakeConnection()
+    assert db.prune_predictions(conn, keep_hours=6) == 0
+    assert conn.executed[-1] == (db.PRUNE_PREDICTIONS_SQL, (21600.0,))
+
+
+def test_prediction_columns_match_init_sql() -> None:
+    """Contract test: the INSERT column list must match the real table definition."""
+    init_sql = Path(__file__).resolve().parents[2] / "docker" / "postgres" / "init.sql"
+    text = init_sql.read_text(encoding="utf-8")
+    body = text.split("CREATE TABLE IF NOT EXISTS predictions (", 1)[1].split(");", 1)[0]
+    columns = [
+        line.split()[0]
+        for line in body.splitlines()
+        if line.strip() and not line.strip().startswith("--")
+    ]
+    assert set(columns) == {*db.PREDICTION_DB_COLUMNS, "stored_at"}
+    assert "UUID PRIMARY KEY" in body

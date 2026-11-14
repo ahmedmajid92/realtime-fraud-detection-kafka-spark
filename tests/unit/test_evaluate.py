@@ -123,3 +123,34 @@ def test_spark_auc_pr_is_not_binned(spark) -> None:
     mllib = evaluate.spark_auc_metrics(scored)["auc_pr"]
     exact = evaluate.average_precision(y.astype(int), p)
     assert mllib == pytest.approx(exact, abs=0.03)
+
+
+def test_bootstrap_ci_on_perfect_ranking() -> None:
+    y = np.r_[np.zeros(300, int), np.ones(30, int)]
+    p = np.r_[np.linspace(0, 0.4, 300), np.linspace(0.6, 1.0, 30)]
+    ci = evaluate.bootstrap_ci(y, p, 0.5, n_resamples=200)
+    assert set(ci) == {"average_precision", "precision", "recall", "f1"}
+    assert ci["recall"] == [1.0, 1.0] and ci["average_precision"] == [1.0, 1.0]
+    assert evaluate.bootstrap_ci(y, p, 0.5, n_resamples=200) == ci  # seeded, reproducible
+
+
+def test_bootstrap_ci_widens_with_noise() -> None:
+    rng = np.random.default_rng(3)
+    y = np.r_[np.zeros(2000, int), np.ones(20, int)]
+    p = np.r_[rng.uniform(0, 0.7, 2000), rng.uniform(0.3, 1.0, 20)]
+    low, high = evaluate.bootstrap_ci(y, p, 0.5, n_resamples=300)["average_precision"]
+    assert 0 <= low < high <= 1 and high - low > 0.05
+
+
+def test_bootstrap_ci_skips_resamples_without_frauds() -> None:
+    y = np.r_[np.zeros(500, int), 1]
+    p = np.r_[np.zeros(500), 1.0]
+    ci = evaluate.bootstrap_ci(y, p, 0.5, n_resamples=50)
+    assert ci["recall"][0] <= ci["recall"][1]
+
+
+def test_tuned_threshold_stays_in_slider_range() -> None:
+    y = np.array([0, 0, 1, 1])
+    p = np.array([0.1, 0.2, 0.99995, 0.99999])
+    threshold, _ = evaluate.best_f1_threshold(y, p)
+    assert threshold == 0.999

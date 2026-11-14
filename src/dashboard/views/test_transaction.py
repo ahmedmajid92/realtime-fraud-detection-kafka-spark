@@ -108,6 +108,7 @@ def _render_result(lang: str) -> None:
                 ]
             )
         )
+        st.caption(t("common.score_note", lang))
 
 
 def render() -> None:

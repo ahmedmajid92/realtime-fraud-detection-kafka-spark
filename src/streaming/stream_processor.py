@@ -137,7 +137,14 @@ def main() -> int:
 
     heartbeat = Heartbeat(paths.heartbeat_path(SERVICE))
     heartbeat.beat(force=True)
-    spark.streams.addListener(ProgressListener(heartbeat, connect, logger))
+    spark.streams.addListener(
+        ProgressListener(
+            heartbeat,
+            connect,
+            logger,
+            predictions_retention_hours=settings.predictions_retention_hours,
+        )
+    )
 
     thresholds = ThresholdProvider(connect, default=active_threshold, logger=logger)
     processor = BatchProcessor(

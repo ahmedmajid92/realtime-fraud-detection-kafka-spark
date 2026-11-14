@@ -252,6 +252,14 @@ def render_results_markdown(metrics: Mapping[str, Any]) -> str:
         lines.append(
             f"| {name.capitalize()} split | {split['rows']:,} | {split['frauds']:,} | {split['fraud_rate']:.4%} |"
         )
+    if "twin_rows" in ds:
+        lines += [
+            "",
+            f"**Feature twins:** {ds['twin_rows']:,} rows in {ds['twin_groups']:,} groups have identical "
+            "V1–V28 and Amount and differ only in `Time`. They are kept, but each group is assigned to a "
+            f"single split ({ds['groups_spanning_splits']} groups span more than one split), so no "
+            "feature vector is trained on and then tested.",
+        ]
     lines += [
         "",
         "## Model comparison",
@@ -272,6 +280,29 @@ def render_results_markdown(metrics: Mapping[str, Any]) -> str:
             f"{_fmt(row['val']['auc_pr'])} | {mark}{_fmt(test['auc_pr'])}{mark} | {_fmt(test['roc_auc'])} | "
             f"{_fmt(test['precision'])} | {_fmt(test['recall'])} | {_fmt(test['f1'])} | {_fmt(row['threshold'], 3)} |"
         )
+    if all("ci95" in row["test"] for row in metrics["comparison"]):
+        lines += [
+            "",
+            "### Uncertainty: 95% bootstrap confidence intervals (test split)",
+            "",
+            "The test transactions are resampled 1,000 times with the model and threshold fixed. With "
+            "only ~70 frauds, intervals are wide; models whose intervals overlap cannot be "
+            "reliably ranked.",
+            "",
+            "| Model | Imbalance strategy | Average precision | Precision | Recall | F1 |",
+            "|---|---|---|---|---|---|",
+        ]
+        for row in metrics["comparison"]:
+            ci = row["test"]["ci95"]
+
+            def _ci(name: str, ci: dict[str, list[float]] = ci) -> str:
+                low, high = ci.get(name, [float("nan"), float("nan")])
+                return f"{low:.3f} – {high:.3f}"
+
+            lines.append(
+                f"| {row['model']} | {row['strategy'].replace('_', ' ')} | {_ci('average_precision')} | "
+                f"{_ci('precision')} | {_ci('recall')} | {_ci('f1')} |"
+            )
     conf = best["test"]["confusion"]
     lines += [
         "",
@@ -304,14 +335,22 @@ def render_results_markdown(metrics: Mapping[str, Any]) -> str:
         "",
         "## Methodology notes",
         "",
-        "* Exact duplicate rows are removed **before** the split, so no identical transaction "
-        "appears in both training and test data.",
-        "* Exact stratified 70/15/15 split (rows ranked by a seeded hash within each class). The test split is used once, "
-        "for the numbers above, and is the only data replayed by the streaming producer.",
+        "* Exact duplicate rows are removed **before** the split. Rows that differ only in `Time` "
+        "are kept, but grouped, so no identical feature vector appears in both training and test data.",
+        "* Group-aware, exact stratified 70/15/15 split (rows ranked within each class by a seeded hash "
+        "of the model inputs). The split is random, not time-ordered. The test split is **never used "
+        "for model selection or threshold tuning**, and it is the only data replayed by the producer.",
         "* Imbalance: *class weights* = balanced weights n/(2·n_class) on the full training "
         f"split; *undersampling* = all frauds + legitimate rows sampled at 1:{metrics['undersample_ratio']:g}.",
-        "* Linear SVM scores are converted to probabilities with Platt scaling fitted on the "
-        "validation split (monotonic, so AUCs are unaffected; the tuned threshold is slightly optimistic).",
+        "* **Selection noise:** the model, its hyper-parameters and the threshold are all chosen on a "
+        "single validation split with ~71 frauds. Where the confidence intervals above overlap, the "
+        "ranking is not statistically conclusive. k-fold cross-validation would be more robust; it was "
+        "not used, to keep the agreed train/validation/test design and a training time of a few minutes.",
+        "* **Calibration:** only the Linear SVM is calibrated (Platt scaling fitted on the validation "
+        "split, which makes its tuned threshold slightly optimistic). The other models' outputs are "
+        "shifted by class weights or undersampling. The dashboard therefore shows a *fraud score*: it "
+        "ranks transactions correctly, but 0.39 does not mean a 39% chance of fraud, and thresholds "
+        "are not comparable across models.",
         "* AUC-PR is MLlib's `areaUnderPR` computed exactly (`numBins=0`; the default 1,000-bin "
         "down-sampling distorts AUC-PR when there are only ~70 frauds among ~42k rows). "
         "Average precision is scikit-learn's step-wise estimate, reported as a cross-check.",

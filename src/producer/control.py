@@ -58,7 +58,14 @@ def parse_control_message(value: bytes | None, logger: Any | None = None) -> Con
 
 
 class ControlListener(threading.Thread):
-    """Background thread applying control commands to a :class:`ControlState`."""
+    """Background thread applying control commands to a :class:`ControlState`.
+
+    * ``caught_up`` is set once every message that existed at startup has been applied,
+      so the producer can wait for the retained state (e.g. "paused") before replaying,
+      instead of sending a burst at the default rate.
+    * If consuming fails unexpectedly, the listener logs it, waits (exponential backoff up
+      to 30 s) and reconnects, so control is never silently lost while the producer runs.
+    """
 
     def __init__(
         self,
@@ -67,6 +74,7 @@ class ControlListener(threading.Thread):
         state: ControlState,
         logger: Any,
         poll_timeout_s: float = 0.5,
+        retry_delay_s: float = 1.0,
     ) -> None:
         super().__init__(name="control-listener", daemon=True)
         self._consumer_factory = consumer_factory
@@ -74,33 +82,52 @@ class ControlListener(threading.Thread):
         self._state = state
         self._logger = logger
         self._poll_timeout_s = poll_timeout_s
+        self._retry_delay_s = retry_delay_s
         self._stop_event = threading.Event()
+        self.caught_up = threading.Event()
 
     def stop(self) -> None:
         self._stop_event.set()
 
     def run(self) -> None:
-        consumer = self._consumer_factory()
-        try:
-            consumer.assign([TopicPartition(self._topic, 0, OFFSET_BEGINNING)])
-            while not self._stop_event.is_set():
-                message = consumer.poll(self._poll_timeout_s)
-                if message is None:
-                    continue
-                if message.error():
-                    self._logger.warning("control.consume_error", error=str(message.error()))
-                    continue
-                command = parse_control_message(message.value(), self._logger)
-                if command is not None:
-                    self._state.apply(command)
-                    paused, rate = self._state.snapshot()
-                    self._logger.info(
-                        "control.applied", command=command.command, paused=paused, rate=rate
-                    )
-        except Exception:  # keep producing with the last known state
-            self._logger.exception("control.listener_crashed")
-        finally:
-            consumer.close()
+        delay = self._retry_delay_s
+        while not self._stop_event.is_set():
+            consumer = None
+            try:
+                consumer = self._consumer_factory()
+                self._consume(consumer)
+            except Exception:  # keep producing with the last known state, then reconnect
+                self._logger.exception("control.listener_crashed", retry_in_s=delay)
+                self.caught_up.set()  # never block the producer on a broken control topic
+            finally:
+                if consumer is not None:
+                    consumer.close()
+            if self._stop_event.wait(delay):
+                break
+            delay = min(delay * 2, 30.0)
+
+    def _consume(self, consumer: Consumer) -> None:
+        partition = TopicPartition(self._topic, 0, OFFSET_BEGINNING)
+        consumer.assign([partition])
+        low, high = consumer.get_watermark_offsets(TopicPartition(self._topic, 0), timeout=5.0)
+        if high <= low:
+            self.caught_up.set()  # nothing retained: the start-up defaults apply
+        while not self._stop_event.is_set():
+            message = consumer.poll(self._poll_timeout_s)
+            if message is None:
+                continue
+            if message.error():
+                self._logger.warning("control.consume_error", error=str(message.error()))
+                continue
+            command = parse_control_message(message.value(), self._logger)
+            if command is not None:
+                self._state.apply(command)
+                paused, rate = self._state.snapshot()
+                self._logger.info(
+                    "control.applied", command=command.command, paused=paused, rate=rate
+                )
+            if message.offset() >= high - 1:
+                self.caught_up.set()
 
 
 def control_consumer_config(bootstrap_servers: str, group_id: str) -> dict[str, Any]:

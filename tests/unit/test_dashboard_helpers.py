@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from src.common.schemas import RAW_INPUT_COLUMNS, Source
-from src.dashboard.helpers import formatting, kpis, metrics_file, samples
+from src.dashboard.helpers import formatting, kpis, metrics_file, samples, thresholds
 from tests.conftest import make_transactions
 
 
@@ -256,3 +256,39 @@ def test_dataset_frame_and_labels(fake_metrics: dict[str, Any]) -> None:
     assert frame["Rows"].tolist()[0] == "1,000"
     assert frame["Fraud rate"].tolist()[0] == "2.0000%"
     assert metrics_file.row_label(fake_metrics["best"], "en") == "Linear SVM · undersampling"
+
+
+# --------------------------------------------------------------------------- thresholds (review R7)
+@pytest.mark.parametrize(
+    ("value", "expected"), [(0.0, 0.001), (0.5, 0.5), (0.9995, 0.999), (2.0, 0.999)]
+)
+def test_clamp_threshold(value: float, expected: float) -> None:
+    assert thresholds.clamp_threshold(value) == expected
+
+
+def test_resolve_threshold_prefers_the_value_spark_uses() -> None:
+    assert thresholds.resolve_threshold(0.3863, 0.5, 0.4) == 0.3863  # unrounded DB value wins
+    assert thresholds.resolve_threshold(None, 0.5, 0.4) == 0.5
+    assert thresholds.resolve_threshold(None, None, 0.4) == 0.4
+    assert thresholds.resolve_threshold(None, None, None) == thresholds.FALLBACK_THRESHOLD
+    assert thresholds.resolve_threshold(0.9999, None, None) == 0.999  # never breaks the slider
+
+
+def test_slider_update_only_when_shared_value_changed() -> None:
+    assert thresholds.slider_update(None, 0.4) is None  # database down: keep the slider
+    assert thresholds.slider_update(0.4, 0.4) is None  # unchanged: keep the user's position
+    assert thresholds.slider_update(0.6, 0.4) == 0.6  # changed elsewhere: follow it
+    assert thresholds.slider_update(0.6, None) == 0.6  # first sync
+
+
+def test_control_state_unknown_is_not_treated_as_defaults() -> None:
+    assert kpis.control_known({}) and kpis.control_known(None)
+    assert not kpis.control_known(kpis.CONTROL_UNKNOWN)
+    assert kpis.commanded_state(kpis.CONTROL_UNKNOWN, 50) == (False, 50.0)
+
+
+def test_comparison_frame_shows_confidence_interval(fake_metrics: dict[str, Any]) -> None:
+    table = metrics_file.comparison_frame(fake_metrics, "en")
+    assert table["Test AP 95% CI"].iloc[0] == "0.400–0.550"
+    fake_metrics["comparison"][0]["test"].pop("ci95")
+    assert metrics_file.comparison_frame(fake_metrics, "en")["Test AP 95% CI"].iloc[0] == "—"

@@ -141,6 +141,12 @@ def make_fake_metrics() -> dict[str, Any]:
                         "recall": 0.75,
                         "f1": 0.72,
                         "confusion": {"tp": 50, "fp": 10, "tn": 42000, "fn": 20},
+                        "ci95": {
+                            "average_precision": [auc - 0.1, auc + 0.05],
+                            "precision": [0.6, 0.8],
+                            "recall": [0.65, 0.85],
+                            "f1": [0.62, 0.8],
+                        },
                     },
                 }
             )
@@ -178,6 +184,9 @@ def make_fake_metrics() -> dict[str, Any]:
             "rows": 995,
             "frauds": 19,
             "fraud_rate": 0.019,
+            "twin_groups": 4,
+            "twin_rows": 9,
+            "groups_spanning_splits": 0,
         },
         "splits": {
             "train": {"rows": 696, "frauds": 13, "fraud_rate": 0.0187},

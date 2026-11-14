@@ -12,21 +12,25 @@ import psycopg
 import streamlit as st
 from psycopg_pool import ConnectionPool, PoolTimeout
 
+from src.common import db
 from src.common.config import (
     DashboardSettings,
     KafkaSettings,
     PathSettings,
     PostgresSettings,
     ProducerSettings,
+    StreamingSettings,
     get_dashboard_settings,
     get_kafka_settings,
     get_logging_settings,
     get_path_settings,
     get_postgres_settings,
     get_producer_settings,
+    get_streaming_settings,
 )
 from src.common.logging_setup import configure_logging, get_logger
-from src.dashboard.helpers import charts, kafka_io, metrics_file, samples
+from src.dashboard.helpers import charts, kafka_io, metrics_file, samples, thresholds
+from src.dashboard.helpers.kpis import CONTROL_UNKNOWN
 
 LANG_KEY = "lang"
 THRESHOLD_KEY = "threshold"
@@ -41,6 +45,7 @@ class AppSettings:
     paths: PathSettings
     dashboard: DashboardSettings
     producer: ProducerSettings
+    streaming: StreamingSettings
 
 
 @st.cache_resource(show_spinner=False)
@@ -52,6 +57,7 @@ def app_settings() -> AppSettings:
         paths=get_path_settings(),
         dashboard=get_dashboard_settings(),
         producer=get_producer_settings(),
+        streaming=get_streaming_settings(),
     )
 
 
@@ -81,17 +87,27 @@ def kafka_producer() -> Any:
 
 
 @st.cache_data(ttl=3, show_spinner=False)
-def last_control_command() -> dict[str, Any] | None:
-    """Latest producer-control message as a dict (cached briefly; ``None`` if unavailable)."""
+def last_control_command() -> dict[str, Any]:
+    """Latest producer-control message as a dict (cached briefly).
+
+    ``{}`` means no command was ever sent; ``CONTROL_UNKNOWN`` means the read failed, which
+    the sidebar must not mistake for "running at the default rate".
+    """
     kafka = app_settings().kafka
     try:
         command = kafka_io.read_last_control(
             kafka.kafka_bootstrap_servers, kafka.topic_producer_control, timeout_s=2.0
         )
-    except Exception as exc:  # broker down → show "unknown" instead of crashing the page
+    except Exception as exc:  # broker down → "unknown" instead of crashing the page
         logger.warning("control.read_failed", error=str(exc)[:200])
-        return None
-    return None if command is None else command.model_dump(mode="json")
+        return dict(CONTROL_UNKNOWN)
+    return {} if command is None else command.model_dump(mode="json")
+
+
+@st.cache_data(ttl=2, show_spinner=False)
+def db_threshold() -> float | None:
+    """The shared alert threshold Spark is using (cached for 2 s; ``None`` if unavailable)."""
+    return with_db(db.get_threshold)
 
 
 def _mtime(path: Path) -> float | None:
@@ -133,10 +149,10 @@ def current_lang() -> str:
 
 
 def current_threshold() -> float:
-    value = st.session_state.get(THRESHOLD_KEY)
-    if value is None:
-        value = model_default_threshold() or 0.5
-    return float(value)
+    """Threshold for KPIs and labels: the one Spark uses (database), then fallbacks."""
+    return thresholds.resolve_threshold(
+        db_threshold(), st.session_state.get(THRESHOLD_KEY), model_default_threshold()
+    )
 
 
 def chart_theme() -> charts.ChartTheme:

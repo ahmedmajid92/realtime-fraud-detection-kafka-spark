@@ -54,9 +54,17 @@ def comparison_frame(metrics: Mapping[str, Any], lang: str) -> pd.DataFrame:
                 t("perf.col.recall", lang): test["recall"],
                 t("perf.col.f1", lang): test["f1"],
                 t("perf.col.threshold", lang): row["threshold"],
+                t("perf.col.ap_ci", lang): _ci_text(test.get("ci95", {}).get("average_precision")),
             }
         )
     return pd.DataFrame(rows)
+
+
+def _ci_text(interval: list[float] | None) -> str:
+    """``[low, high]`` → ``"0.712–0.905"`` (``"—"`` when unavailable)."""
+    if not interval or len(interval) != 2:
+        return "—"
+    return f"{interval[0]:.3f}–{interval[1]:.3f}"
 
 
 def candidates_frame(metrics: Mapping[str, Any], lang: str) -> pd.DataFrame:

@@ -32,6 +32,7 @@ from src.producer.rate_limiter import RateLimiter
 from src.producer.replay import ReplayDataMissingError, TransactionReplayer, load_replay_dataset
 
 SERVICE = "producer"
+CONTROL_SYNC_TIMEOUT_S = 10.0
 
 logger = get_logger(__name__)
 
@@ -154,6 +155,12 @@ def main() -> int:
         logger,
     )
     listener.start()
+    # Apply the retained command (e.g. "paused") before sending anything.
+    if listener.caught_up.wait(CONTROL_SYNC_TIMEOUT_S):
+        paused, rate = state.snapshot()
+        logger.info("control.synced", paused=paused, rate=rate)
+    else:
+        logger.warning("control.sync_timeout", waited_s=CONTROL_SYNC_TIMEOUT_S)
 
     producer = Producer(producer_config(kafka.kafka_bootstrap_servers, client_id=SERVICE))
     stats = DeliveryStats()

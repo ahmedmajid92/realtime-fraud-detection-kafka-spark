@@ -20,3 +20,4 @@ venv
 htmlcov
 *.md
 run.ps1
+.kaggle

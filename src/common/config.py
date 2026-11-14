@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from src.common.schemas import MAX_PRODUCER_RATE
+from src.common.schemas import MAX_PRODUCER_RATE, THRESHOLD_MAX, THRESHOLD_MIN
 
 _SETTINGS_CONFIG = SettingsConfigDict(case_sensitive=False, extra="ignore", frozen=True)
 
@@ -151,7 +151,8 @@ class StreamingSettings(BaseSettings):
     trigger_interval_seconds: float = Field(default=1.0, gt=0)
     max_offsets_per_trigger: int = Field(default=5000, gt=0)
     starting_offsets: Literal["earliest", "latest"] = "earliest"
-    alert_threshold_override: float | None = Field(default=None, gt=0, lt=1)
+    alert_threshold_override: float | None = Field(default=None, ge=THRESHOLD_MIN, le=THRESHOLD_MAX)
+    predictions_retention_hours: float = Field(default=6.0, gt=0)
 
     @field_validator("alert_threshold_override", mode="before")
     @classmethod

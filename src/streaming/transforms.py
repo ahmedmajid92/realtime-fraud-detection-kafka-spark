@@ -39,14 +39,28 @@ def parse_transactions(raw: DataFrame) -> DataFrame:
     return parsed.withColumn("event_time", F.try_to_timestamp(F.col("event_time")))
 
 
+UUID_PATTERN = r"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$"
+_INFINITY = float("inf")
+
+
 def is_valid_transaction() -> Column:
-    """Row filter: required fields present, known source, finite non-negative inputs."""
+    """Row filter: everything a row needs to be scored **and** stored without error.
+
+    Required fields present, a well-formed UUID (the Postgres key is ``uuid``), a known
+    source, a non-negative replay pass, finite non-negative inputs (Spark's JSON reader
+    accepts ``NaN``/``Infinity`` tokens, and either would make ``VectorAssembler`` fail
+    the whole micro-batch), and a binary or missing label. Rows that fail are dropped
+    and counted, so one bad message can never crash-loop the query.
+    """
     condition = F.lit(True)
     for name in REQUIRED_TRANSACTION_FIELDS:
         condition = condition & F.col(name).isNotNull()
     for name in RAW_INPUT_COLUMNS:
-        condition = condition & ~F.isnan(F.col(name))
+        column = F.col(name)
+        condition = condition & ~F.isnan(column) & (F.abs(column) < F.lit(_INFINITY))
+    condition = condition & F.col("transaction_id").rlike(UUID_PATTERN)
     condition = condition & F.col("source").isin([s.value for s in Source])
+    condition = condition & (F.col("replay_pass") >= 0)
     condition = condition & (F.col(AMOUNT_COLUMN) >= 0) & (F.col(TIME_COLUMN) >= 0)
     condition = condition & (F.col("actual_class").isNull() | F.col("actual_class").isin(0, 1))
     return condition
@@ -62,9 +76,11 @@ def score(transactions: DataFrame, model: PipelineModel) -> DataFrame:
 def enrich(scored: DataFrame, model_name: str) -> DataFrame:
     """Keep the output fields and add processing time, latency, hour and model name.
 
-    ``latency_ms`` = time from the producer's ``event_time`` to scoring in this batch
-    (Kafka queueing + trigger wait + model inference). ``current_timestamp()`` is fixed
-    once per query execution, so every row of a batch shares the same ``processed_at``.
+    ``latency_ms`` = time from the producer's ``event_time`` to the **start** of this
+    micro-batch's execution, i.e. Kafka queueing plus trigger wait. ``current_timestamp()``
+    is fixed once when the batch query starts, so it excludes model inference and the
+    sink writes. The end-to-end figure (``stored_at - event_time`` in Postgres) covers
+    those as well.
     """
     processed_at = F.current_timestamp()
     latency_ms = (F.unix_micros(processed_at) - F.unix_micros(F.col("event_time"))) / F.lit(1000.0)

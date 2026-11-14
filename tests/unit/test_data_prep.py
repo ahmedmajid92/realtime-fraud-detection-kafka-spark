@@ -178,3 +178,23 @@ def test_save_split_writes_sorted_parquet(spark, tmp_path: Path) -> None:
     written = pd.read_parquet(target)
     assert written["Time"].is_monotonic_increasing
     assert not list(target.parent.glob("*.tmp"))  # temp file cleaned up
+
+
+def test_feature_twins_never_straddle_splits(spark) -> None:
+    """Review R3: rows identical except for Time must land in the same split."""
+    base = make_transactions(600, 60, seed=4)
+    base["Time"] = range(len(base))
+    twins = base.sample(n=40, random_state=1).copy()
+    twins["Time"] = twins["Time"] + 1_000_000  # same features, different time
+    frame = spark.createDataFrame(pd.concat([base, twins], ignore_index=True))
+    splits = data_prep.stratified_split(frame, seed=42)
+    stats = data_prep.feature_twin_stats(splits.assigned)
+    assert stats == {"twin_groups": 40, "twin_rows": 80, "groups_spanning_splits": 0}
+    total = sum(getattr(splits, name).count() for name in ("train", "val", "test"))
+    assert total == len(base) + len(twins)
+
+
+def test_splits_are_repartitioned_for_parallel_training(spark) -> None:
+    splits = data_prep.stratified_split(spark.createDataFrame(make_transactions(200, 20)), seed=1)
+    expected = int(spark.conf.get("spark.sql.shuffle.partitions"))
+    assert splits.train.rdd.getNumPartitions() == expected

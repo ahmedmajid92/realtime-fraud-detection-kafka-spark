@@ -116,9 +116,13 @@ class FakeConnection:
 
 # --------------------------------------------------------------------------- Kafka
 class FakeMessage:
-    def __init__(self, value: bytes | None, error: Any = None) -> None:
+    def __init__(self, value: bytes | None, error: Any = None, offset: int = 0) -> None:
         self._value = value
         self._error = error
+        self._offset = offset
+
+    def offset(self) -> int:
+        return self._offset
 
     def value(self) -> bytes | None:
         return self._value

@@ -161,16 +161,61 @@ def test_control_listener_applies_commands_from_beginning() -> None:
     )
 
 
-def test_control_listener_survives_consumer_crash() -> None:
+def test_control_listener_reconnects_after_a_crash() -> None:
     class BrokenConsumer(FakeConsumer):
         def assign(self, partitions):  # type: ignore[no-untyped-def]
             raise RuntimeError("cannot assign")
 
-    consumer, logger = BrokenConsumer(), FakeLogger()
-    listener = ControlListener(lambda: consumer, "producer-control", ControlState(50), logger)
-    listener.run()  # synchronously
+    broken = BrokenConsumer()
+    healthy = FakeConsumer(messages=[FakeMessage(command("pause", True, 10).to_json_bytes())])
+    consumers = [broken, healthy]
+    state, logger = ControlState(rate=50), FakeLogger()
+    listener = ControlListener(
+        lambda: consumers.pop(0),
+        "producer-control",
+        state,
+        logger,
+        poll_timeout_s=0.01,
+        retry_delay_s=0.01,
+    )
+    listener.start()
+    _wait_until(lambda: state.paused)
+    listener.stop()
+    listener.join(timeout=5)
     assert logger.events("exception") == ["control.listener_crashed"]
-    assert consumer.closed
+    assert broken.closed and healthy.closed
+    assert state.snapshot() == (True, 10.0)  # control works again after reconnecting
+
+
+def test_control_listener_signals_caught_up_after_retained_messages() -> None:
+    retained = [
+        FakeMessage(command("pause", True, 30).to_json_bytes(), offset=0),
+        FakeMessage(command("set_rate", True, 40).to_json_bytes(), offset=1),
+    ]
+    consumer = FakeConsumer(messages=retained, watermarks={("producer-control", 0): (0, 2)})
+    state = ControlState(rate=50)
+    listener = ControlListener(
+        lambda: consumer, "producer-control", state, FakeLogger(), poll_timeout_s=0.01
+    )
+    listener.start()
+    assert listener.caught_up.wait(5)
+    assert state.snapshot() == (True, 40.0)  # every retained command applied before replay starts
+    listener.stop()
+    listener.join(timeout=5)
+
+
+def test_control_listener_caught_up_immediately_on_empty_topic() -> None:
+    listener = ControlListener(
+        lambda: FakeConsumer(),
+        "producer-control",
+        ControlState(50),
+        FakeLogger(),
+        poll_timeout_s=0.01,
+    )
+    listener.start()
+    assert listener.caught_up.wait(5)
+    listener.stop()
+    listener.join(timeout=5)
 
 
 # --------------------------------------------------------------------------- replay data

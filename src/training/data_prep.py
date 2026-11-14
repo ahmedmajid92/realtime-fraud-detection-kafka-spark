@@ -11,7 +11,14 @@ from pathlib import Path
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
-from src.common.schemas import CSV_COLUMNS, LABEL_COLUMN, TIME_COLUMN, WEIGHT_COLUMN
+from src.common.schemas import (
+    AMOUNT_COLUMN,
+    CSV_COLUMNS,
+    LABEL_COLUMN,
+    TIME_COLUMN,
+    V_COLUMNS,
+    WEIGHT_COLUMN,
+)
 from src.common.spark_schemas import csv_schema
 
 KAGGLE_DATASET_URL = "https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud"
@@ -50,6 +57,7 @@ class Splits:
     train: DataFrame
     val: DataFrame
     test: DataFrame
+    assigned: DataFrame | None = None  # all rows with the ``_split`` column (for diagnostics)
 
 
 def missing_dataset_message(path: Path) -> str:
@@ -139,6 +147,8 @@ def drop_exact_duplicates(df: DataFrame) -> tuple[DataFrame, int]:
 
 SPLIT_COLUMN = "_split"
 SPLIT_NAMES = ("train", "val", "test")
+GROUP_COLUMNS: tuple[str, ...] = (*V_COLUMNS, AMOUNT_COLUMN)
+"""Model inputs except ``Time``. Rows equal on all of these are "feature twins"."""
 
 
 def assign_splits(
@@ -146,24 +156,27 @@ def assign_splits(
     weights: tuple[float, float, float] = (0.70, 0.15, 0.15),
     seed: int = 42,
     label_col: str = LABEL_COLUMN,
+    group_cols: tuple[str, ...] = GROUP_COLUMNS,
 ) -> DataFrame:
-    """Add a ``_split`` column (``train``/``val``/``test``) with an **exact** per-class ratio.
+    """Add a ``_split`` column (``train``/``val``/``test``): stratified and group-aware.
 
-    Each row gets a pseudo-random key ``xxhash64(seed, <all columns>)``. Rows are ranked by
-    that key within their class and cut at the cumulative weights. Compared with
-    ``randomSplit`` per class, this gives exact proportions even for the 473 frauds, and it
-    is reproducible regardless of row order (the key depends only on row content; exact
-    duplicates were already removed).
+    * **Group-aware:** the key is ``xxhash64(seed, V1..V28, Amount)``, so it ignores
+      ``Time``. Rows that differ only in ``Time`` (about 12k "feature twins" in this
+      dataset) share a key, get the same ``rank()`` and therefore always land in the same
+      split. Otherwise an identical feature vector could be trained on and then tested.
+    * **Stratified and exact:** ranks are computed within each class and cut at the
+      cumulative weights, so every split has the same fraud ratio (exact up to the size
+      of a twin group at a boundary). The result doesn't depend on row order.
     """
     if len(weights) != 3 or any(w <= 0 for w in weights):
         raise ValueError("weights must be three positive numbers")
     if abs(sum(weights) - 1.0) > 1e-9:
         raise ValueError("weights must sum to 1")
 
-    key = F.xxhash64(F.lit(seed), *[F.col(c) for c in df.columns])
+    key = F.xxhash64(F.lit(seed), *[F.col(c) for c in group_cols])
     by_class = Window.partitionBy(label_col)
-    ordered = by_class.orderBy("_split_key", *df.columns)
-    position = (F.row_number().over(ordered) - 1) / F.count(F.lit(1)).over(by_class)
+    ordered = by_class.orderBy("_split_key", *group_cols)
+    position = (F.rank().over(ordered) - 1) / F.count(F.lit(1)).over(by_class)
     train_end, val_end = weights[0], weights[0] + weights[1]
     return (
         df.withColumn("_split_key", key)
@@ -184,12 +197,42 @@ def stratified_split(
     seed: int = 42,
     label_col: str = LABEL_COLUMN,
 ) -> Splits:
-    """Disjoint train / validation / test splits with exactly the same class ratio."""
+    """Disjoint, group-aware train / validation / test splits with the same class ratio.
+
+    The window in :func:`assign_splits` leaves the data in one partition per class. Each
+    split is repartitioned so training uses every core.
+    """
     assigned = assign_splits(df, weights, seed, label_col)
+    partitions = int(df.sparkSession.conf.get("spark.sql.shuffle.partitions", "8"))
     train, val, test = (
-        assigned.filter(F.col(SPLIT_COLUMN) == name).drop(SPLIT_COLUMN) for name in SPLIT_NAMES
+        assigned.filter(F.col(SPLIT_COLUMN) == name).drop(SPLIT_COLUMN).repartition(partitions)
+        for name in SPLIT_NAMES
     )
-    return Splits(train=train, val=val, test=test)
+    return Splits(train=train, val=val, test=test, assigned=assigned)
+
+
+def feature_twin_stats(
+    assigned: DataFrame, group_cols: tuple[str, ...] = GROUP_COLUMNS
+) -> dict[str, int]:
+    """Count feature-twin groups and how many span more than one split (should be 0)."""
+    groups = assigned.groupBy(*group_cols).agg(
+        F.count(F.lit(1)).alias("n"), F.countDistinct(SPLIT_COLUMN).alias("splits")
+    )
+    row = (
+        groups.filter(F.col("n") > 1)
+        .agg(
+            F.count(F.lit(1)).alias("groups"),
+            F.coalesce(F.sum("n"), F.lit(0)).alias("rows"),
+            F.coalesce(F.sum((F.col("splits") > 1).cast("int")), F.lit(0)).alias("spanning"),
+        )
+        .first()
+    )
+    assert row is not None
+    return {
+        "twin_groups": int(row["groups"]),
+        "twin_rows": int(row["rows"]),
+        "groups_spanning_splits": int(row["spanning"]),
+    }
 
 
 def class_weight_values(n_negative: int, n_positive: int) -> tuple[float, float]:

@@ -17,8 +17,8 @@ def test_results_markdown_contains_all_rows(fake_metrics: dict[str, Any]) -> Non
     assert f"## Selected model: {best['display_name']}" in markdown
     assert f"**{best['model']}**" in markdown  # best row is bold
     assert "| **Actual fraud** | 20 (FN) | 50 (TP) |" in markdown
-    # once in the comparison table, once in the all-candidates table
-    assert markdown.count("| Logistic Regression | class weights") == 2
+    # comparison table, confidence-interval table and all-candidates table
+    assert markdown.count("| Logistic Regression | class weights") == 3
     assert "![Precision-Recall curves](figures/pr_curves.png)" in markdown
     assert "1:10" in markdown
 
@@ -44,3 +44,20 @@ def test_model_colours_follow_fixed_slot_order() -> None:
         "gbt": "#1baf7a",
         "svm": "#eda100",
     }
+
+
+def test_results_markdown_reports_uncertainty_and_twins(fake_metrics: dict[str, Any]) -> None:
+    markdown = report.render_results_markdown(fake_metrics)
+    assert "95% bootstrap confidence intervals" in markdown
+    assert "**Feature twins:** 9 rows in 4 groups" in markdown
+    assert "never used for model selection or threshold tuning" in markdown
+    assert "*fraud score*" in markdown  # calibration limitation stated (review R6)
+
+
+def test_results_markdown_without_optional_sections(fake_metrics: dict[str, Any]) -> None:
+    for row in fake_metrics["comparison"]:
+        row["test"].pop("ci95")
+    for key in ("twin_groups", "twin_rows", "groups_spanning_splits"):
+        fake_metrics["dataset"].pop(key)
+    markdown = report.render_results_markdown(fake_metrics)
+    assert "bootstrap" not in markdown and "Feature twins" not in markdown

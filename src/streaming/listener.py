@@ -10,7 +10,7 @@ from typing import Any
 import psycopg
 from pyspark.sql.streaming import StreamingQueryListener
 
-from src.common.db import insert_stream_progress, prune_stream_progress
+from src.common.db import insert_stream_progress, prune_predictions, prune_stream_progress
 from src.common.health import Heartbeat
 
 PRUNE_EVERY_EVENTS = 600
@@ -59,6 +59,7 @@ class ProgressListener(StreamingQueryListener):
         heartbeat: Heartbeat,
         connect: Callable[[], psycopg.Connection[Any]],
         logger: Any,
+        predictions_retention_hours: float = 6.0,
     ) -> None:
         super().__init__()
         self._heartbeat = heartbeat
@@ -66,6 +67,7 @@ class ProgressListener(StreamingQueryListener):
         self._logger = logger
         self._conn: psycopg.Connection[Any] | None = None
         self._events = 0
+        self._retention_hours = predictions_retention_hours
 
     def onQueryStarted(self, event: Any) -> None:
         self._heartbeat.beat(force=True)
@@ -81,6 +83,9 @@ class ProgressListener(StreamingQueryListener):
             self._events += 1
             if self._events % PRUNE_EVERY_EVENTS == 0:
                 prune_stream_progress(self._conn)
+                removed = prune_predictions(self._conn, self._retention_hours)
+                if removed:
+                    self._logger.info("retention.pruned", predictions=removed)
         except Exception as exc:  # never let monitoring break the query
             self._logger.warning("progress.store_failed", error=str(exc).strip())
             if self._conn is not None:

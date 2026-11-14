@@ -133,3 +133,18 @@ def test_accessors_are_cached() -> None:
     assert config.get_streaming_settings() is config.get_streaming_settings()
     assert config.get_dashboard_settings() is config.get_dashboard_settings()
     assert config.get_logging_settings() is config.get_logging_settings()
+
+
+@pytest.mark.parametrize("raw", ["0.0005", "0.9995"])
+def test_threshold_override_matches_slider_range(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("ALERT_THRESHOLD_OVERRIDE", raw)
+    with pytest.raises(ValidationError):
+        config.StreamingSettings()
+
+
+def test_predictions_retention(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PREDICTIONS_RETENTION_HOURS", raising=False)
+    assert config.StreamingSettings().predictions_retention_hours == 6.0
+    monkeypatch.setenv("PREDICTIONS_RETENTION_HOURS", "0")
+    with pytest.raises(ValidationError):
+        config.StreamingSettings()

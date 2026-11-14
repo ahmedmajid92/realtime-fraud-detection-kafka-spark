@@ -18,9 +18,10 @@ from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 from sklearn.metrics import average_precision_score, precision_recall_curve, roc_curve
 
-from src.common.schemas import LABEL_COLUMN
+from src.common.schemas import LABEL_COLUMN, THRESHOLD_MAX, THRESHOLD_MIN
 
 PROBABILITY_COL = "probability"
+BOOTSTRAP_RESAMPLES = 1000
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,9 @@ def best_f1_threshold(y_true: np.ndarray, p_fraud: np.ndarray) -> tuple[float, f
         2 * precision * recall, denominator, out=np.zeros_like(denominator), where=denominator > 0
     )
     best = int(np.argmax(f1))
-    threshold = float(np.clip(thresholds[best], 1e-6, 1 - 1e-6))
+    # Keep the tuned value inside the range every component accepts (dashboard slider,
+    # ALERT_THRESHOLD_OVERRIDE), so it can always be displayed and adjusted.
+    threshold = float(np.clip(thresholds[best], THRESHOLD_MIN, THRESHOLD_MAX))
     return threshold, float(f1[best])
 
 
@@ -152,6 +155,50 @@ def curve_points(
 def average_precision(y_true: np.ndarray, p_fraud: np.ndarray) -> float:
     """scikit-learn's average precision (step-wise AUC-PR), reported as a secondary metric."""
     return float(average_precision_score(y_true, p_fraud))
+
+
+def bootstrap_ci(
+    y_true: np.ndarray,
+    p_fraud: np.ndarray,
+    threshold: float,
+    *,
+    n_resamples: int = BOOTSTRAP_RESAMPLES,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> dict[str, list[float]]:
+    """Percentile-bootstrap confidence intervals over transactions.
+
+    The model and threshold are fixed; the test transactions are resampled with
+    replacement. This shows how much of a difference between models is just the
+    sampling noise of ~70 frauds. Returns ``{metric: [low, high]}`` for average precision,
+    precision, recall and F1. Resamples that contain no fraud are skipped.
+    """
+    y_true, p_fraud = np.asarray(y_true), np.asarray(p_fraud)
+    rng = np.random.default_rng(seed)
+    samples: dict[str, list[float]] = {
+        "average_precision": [],
+        "precision": [],
+        "recall": [],
+        "f1": [],
+    }
+    n = len(y_true)
+    for _ in range(n_resamples):
+        index = rng.integers(0, n, n)
+        y_b, p_b = y_true[index], p_fraud[index]
+        if not y_b.any():
+            continue
+        samples["average_precision"].append(average_precision_score(y_b, p_b))
+        for name, value in precision_recall_f1(confusion_at(y_b, p_b, threshold)).items():
+            samples[name].append(value)
+    alpha = (1.0 - confidence) / 2.0
+    return {
+        name: [
+            round(float(np.quantile(values, alpha)), 4),
+            round(float(np.quantile(values, 1 - alpha)), 4),
+        ]
+        for name, values in samples.items()
+        if values
+    }
 
 
 def _round_list(values: np.ndarray, digits: int = 5) -> list[float]:

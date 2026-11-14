@@ -23,6 +23,7 @@ def write_kafka(predictions: DataFrame, bootstrap_servers: str, topic: str) -> N
         to_kafka_records(predictions)
         .write.format("kafka")
         .option("kafka.bootstrap.servers", bootstrap_servers)
+        .option("kafka.compression.type", "lz4")
         .option("topic", topic)
         .save()
     )

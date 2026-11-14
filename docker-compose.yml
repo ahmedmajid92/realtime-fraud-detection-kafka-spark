@@ -61,6 +61,8 @@ services:
     image: apache/kafka:4.1.2
     entrypoint: ["/bin/bash", "-c", "tr -d '\\r' < /scripts/create-topics.sh | bash"]
     env_file: .env
+    environment:
+      POSTGRES_PASSWORD: ""  # least privilege: this service never connects to Postgres
     volumes:
       - ./docker/kafka/create-topics.sh:/scripts/create-topics.sh:ro
     depends_on:
@@ -122,6 +124,8 @@ services:
     build: *spark-build
     command: ["python", "-m", "src.training.train_model"]
     env_file: .env
+    environment:
+      POSTGRES_PASSWORD: ""  # least privilege: this service never connects to Postgres
     volumes:
       - ./data:/app/data
       - ./models:/app/models
@@ -137,6 +141,8 @@ services:
     build: *app-build
     command: ["python", "-m", "src.producer.producer"]
     env_file: .env
+    environment:
+      POSTGRES_PASSWORD: ""  # least privilege: this service never connects to Postgres
     volumes:
       - ./data:/app/data:ro
     depends_on:
@@ -221,10 +227,13 @@ services:
       target: test
     command: ["pytest", "tests/unit", "--cov=src", "--cov-report=term-missing", "--cov-report=html:reports/coverage"]
     env_file: .env
+    environment:
+      POSTGRES_PASSWORD: ""  # least privilege: this service never connects to Postgres
     volumes:
       - ./src:/app/src:ro
       - ./tests:/app/tests:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./docker/postgres:/app/docker/postgres:ro
       - ./reports:/app/reports
     mem_limit: 3g
     init: true

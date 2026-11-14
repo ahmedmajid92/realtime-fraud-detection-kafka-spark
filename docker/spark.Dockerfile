@@ -79,5 +79,6 @@ COPY requirements/app.txt requirements/dev.txt /tmp/requirements/
 RUN pip install -r /tmp/requirements/app.txt -r /tmp/requirements/dev.txt -c /tmp/requirements/constraints.txt
 COPY --chown=app:app pyproject.toml /app/pyproject.toml
 COPY --chown=app:app tests/ /app/tests/
+COPY --chown=app:app docker/postgres/ /app/docker/postgres/
 USER app
 CMD ["pytest"]

@@ -134,8 +134,9 @@ def render() -> None:
         t(
             "live.caption",
             lang,
-            threshold=f"{res.current_threshold():.3f}",
+            threshold=f"{res.current_threshold():.4f}",
             seconds=f"{REFRESH_S:g}",
+            hours=f"{res.app_settings().streaming.predictions_retention_hours:g}",
         )
     )
     _live_panel()

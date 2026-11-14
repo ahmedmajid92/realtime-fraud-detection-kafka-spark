@@ -88,10 +88,39 @@ def test_invalid_messages_are_filtered(spark) -> None:
         event_bytes(actual_class=3),
         event_bytes(event_time="yesterday"),
         event_bytes().replace(b'"V1":', b'"V1": NaN, "_ignored":'),
+        # review R1: values that used to pass validation and then fail the whole batch
+        event_bytes(transaction_id="test-1"),  # not a UUID → Postgres ::uuid cast fails
+        event_bytes(Time=float("inf")),  # Infinity → NaN hour features → VectorAssembler error
+        event_bytes(Amount=float("-inf")),
+        event_bytes(V7=float("inf")),
+        event_bytes(replay_pass=-1),
     ]
     parsed = parse_transactions(raw_frame(spark, payloads))
     assert parsed.count() == len(payloads)
     assert parsed.filter(is_valid_transaction()).count() == 1
+
+
+def test_infinity_tokens_are_parsed_then_rejected(spark) -> None:
+    """Spark's JSON reader accepts Infinity tokens; the filter must catch them."""
+    parsed = parse_transactions(raw_frame(spark, [event_bytes(Time=float("inf"))]))
+    assert parsed.first()["Time"] == float("inf")
+    assert parsed.filter(is_valid_transaction()).count() == 0
+
+
+def test_valid_rows_score_without_errors_even_next_to_poison_pills(spark, tiny_model) -> None:
+    payloads = [event_bytes(0), event_bytes(Time=float("inf")), event_bytes(transaction_id="x")]
+    parsed = parse_transactions(raw_frame(spark, payloads)).filter(is_valid_transaction())
+    assert score(parsed, tiny_model).count() == 1  # no VectorAssembler error
+
+
+def test_scoring_ignores_the_true_label(spark, tiny_model) -> None:
+    """Leakage guard: flipping actual_class must not change the score."""
+    legit = event_bytes(0)
+    flipped = json.loads(legit)
+    flipped["actual_class"] = 1 - flipped["actual_class"]
+    frame = parse_transactions(raw_frame(spark, [legit, json.dumps(flipped).encode()]))
+    probabilities = [r["fraud_probability"] for r in score(frame, tiny_model).collect()]
+    assert probabilities[0] == probabilities[1]
 
 
 # --------------------------------------------------------------------------- score / enrich / label
@@ -222,8 +251,10 @@ def test_write_kafka_builds_batch_writer(monkeypatch: pytest.MonkeyPatch) -> Non
     chain.assert_called_once_with("kafka")
     options = chain.return_value.option
     options.assert_called_once_with("kafka.bootstrap.servers", "kafka:9092")
-    options.return_value.option.assert_called_once_with("topic", "predictions")
-    options.return_value.option.return_value.save.assert_called_once()
+    options.return_value.option.assert_called_once_with("kafka.compression.type", "lz4")
+    topic_option = options.return_value.option.return_value.option
+    topic_option.assert_called_once_with("topic", "predictions")
+    topic_option.return_value.save.assert_called_once()
 
 
 # --------------------------------------------------------------------------- threshold provider
@@ -307,12 +338,19 @@ def test_progress_listener(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(listener_module, "insert_stream_progress", fake_insert)
     monkeypatch.setattr(listener_module, "prune_stream_progress", lambda conn: pruned.append(conn))
+    retention: list[float] = []
+    monkeypatch.setattr(
+        listener_module, "prune_predictions", lambda conn, hours: retention.append(hours) or 42
+    )
     monkeypatch.setattr(listener_module, "PRUNE_EVERY_EVENTS", 2)
     connections: list[FakeConnection] = []
     logger = FakeLogger()
     heartbeat = Heartbeat(tmp_path / "stream.heartbeat")
     listener = listener_module.ProgressListener(
-        heartbeat, lambda: connections.append(FakeConnection()) or connections[-1], logger
+        heartbeat,
+        lambda: connections.append(FakeConnection()) or connections[-1],
+        logger,
+        predictions_retention_hours=3,
     )
     listener.onQueryStarted(SimpleNamespace(id="q", runId="r"))
     assert heartbeat.path.is_file()
@@ -321,6 +359,8 @@ def test_progress_listener(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert len(stored) == 2
     assert len(connections) == 2  # reconnected after the failed insert
     assert pruned  # pruning ran after the 2nd successful insert
+    assert retention == [3]  # predictions are pruned to the retention window too
+    assert "retention.pruned" in logger.events()
     listener.onQueryIdle(SimpleNamespace())
     listener.onQueryTerminated(SimpleNamespace(id="q", exception=None))
     assert connections[-1].closed

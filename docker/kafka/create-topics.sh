@@ -9,6 +9,7 @@ TOPICS_CMD=/opt/kafka/bin/kafka-topics.sh
 export KAFKA_HEAP_OPTS="-Xms32m -Xmx128m"
 
 ONE_DAY_MS=86400000
+PARTITION_CAP_BYTES=268435456  # 256 MB per partition
 SEVEN_DAYS_MS=604800000
 
 echo "Waiting for Kafka at ${BOOTSTRAP}..."
@@ -30,8 +31,8 @@ create_topic() {
     --topic "$name" --partitions "$partitions" --replication-factor 1 "$@"
 }
 
-create_topic "${TOPIC_TRANSACTIONS:?}"     3 --config "retention.ms=${ONE_DAY_MS}"
-create_topic "${TOPIC_PREDICTIONS:?}"      3 --config "retention.ms=${ONE_DAY_MS}"
+create_topic "${TOPIC_TRANSACTIONS:?}"     3 --config "retention.ms=${ONE_DAY_MS}" --config "retention.bytes=${PARTITION_CAP_BYTES}"
+create_topic "${TOPIC_PREDICTIONS:?}"      3 --config "retention.ms=${ONE_DAY_MS}" --config "retention.bytes=${PARTITION_CAP_BYTES}"
 create_topic "${TOPIC_FRAUD_ALERTS:?}"     1 --config "retention.ms=${SEVEN_DAYS_MS}"
 create_topic "${TOPIC_PRODUCER_CONTROL:?}" 1 --config "cleanup.policy=compact"
 
