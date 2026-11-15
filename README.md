@@ -334,7 +334,7 @@ Every setting lives in **`.env`** (created from [.env.example](.env.example) by 
 ├── docker/          spark.Dockerfile, app.Dockerfile, kafka/create-topics.sh, postgres/init.sql
 ├── docker-compose.yml, .env.example, run.ps1, pyproject.toml, requirements/ (pinned + constraints.txt)
 ├── data/raw/        creditcard.csv (you add it)     models/   trained model + metrics (generated)
-├── docs/            SYSTEM_OVERVIEW.md, RESULTS.md, E2E_REPORT.md, DEMO_SCRIPT.md, figures/, screenshots/
+├── docs/            SYSTEM_OVERVIEW.md, DASHBOARD_GUIDE.md, RESULTS.md, E2E_REPORT.md, DEMO_SCRIPT.md, figures/, screenshots/
 └── PLAN.md · PROGRESS.md · REVIEW.md · README.md
 ```
 
@@ -369,6 +369,7 @@ Every setting lives in **`.env`** (created from [.env.example](.env.example) by 
 | [PLAN.md](PLAN.md) | Approved design: architecture, message schemas, decisions, versions, risks |
 | [PROGRESS.md](PROGRESS.md) | What was done in each phase, problems found and fixed, measurements |
 | [REVIEW.md](REVIEW.md) | Independent review (Claude Fable 5.2) and the resolution of every finding |
+| [docs/DASHBOARD_GUIDE.md](docs/DASHBOARD_GUIDE.md) | A short tour of every dashboard page, with screenshots |
 | [docs/RESULTS.md](docs/RESULTS.md) | Full training results, confidence intervals, methodology notes |
 | [docs/E2E_REPORT.md](docs/E2E_REPORT.md) | Latest end-to-end latency and throughput measurement |
 | [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | A 10-minute presentation script |
