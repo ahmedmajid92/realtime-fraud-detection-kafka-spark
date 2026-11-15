@@ -104,6 +104,64 @@ Selecting **العربية** in the sidebar translates every page and switches t
 | Kafka UI | http://localhost:8081 | Browse topics and read the actual messages (read-only) |
 | Spark UI | http://localhost:4040 | Spark jobs, stages and the streaming query's statistics |
 
+## Setting up on another computer
+
+Both options need the dataset. Download `creditcard.csv` from [Kaggle](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud) and put it in `data/raw/`. The file isn't in the repository.
+
+### Option A: Docker (recommended, tested)
+
+You need **Docker Desktop** (with WSL2 on Windows) or Docker Engine, **Git**, and at least **8 GB of RAM**. Java, Python, Kafka and PostgreSQL all run inside containers, so nothing else has to be installed.
+
+```powershell
+git clone https://github.com/ahmedmajid92/realtime-fraud-detection-kafka-spark.git
+cd realtime-fraud-detection-kafka-spark
+.\run.ps1 setup    # creates .env, checks the dataset, builds the images
+.\run.ps1 up       # starts everything; the first start also trains the model (~8 min)
+start http://localhost:8501
+```
+
+| Task | Command |
+|---|---|
+| Stop (data is kept) | `.\run.ps1 down` |
+| Retrain the model | `.\run.ps1 train` |
+| Status / logs | `.\run.ps1 status` · `.\run.ps1 logs stream-processor` |
+| Linux / macOS (no PowerShell) | `cp .env.example .env`, set `POSTGRES_PASSWORD`, then `docker compose up -d --build` |
+
+### Option B: Directly on the computer (without Docker)
+
+This takes more manual setup. It suits **Linux, macOS or WSL2**. On plain Windows, Spark also needs `winutils.exe` and `HADOOP_HOME` to write files. You need **Python 3.12**, **Java 17**, **Kafka 4.1** and **PostgreSQL 17**, with Kafka and PostgreSQL running.
+
+```bash
+# 1. Python packages
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements/spark.txt -r requirements/app.txt -c requirements/constraints.txt
+
+# 2. Database: create a user and a database, both named "fraud", then the tables
+psql -U fraud -d fraud -f docker/postgres/init.sql
+
+# 3. Kafka topics
+kafka-topics.sh --bootstrap-server localhost:9092 --create --topic transactions --partitions 3
+kafka-topics.sh --bootstrap-server localhost:9092 --create --topic predictions --partitions 3
+kafka-topics.sh --bootstrap-server localhost:9092 --create --topic fraud-alerts --partitions 1
+kafka-topics.sh --bootstrap-server localhost:9092 --create --topic producer-control --partitions 1 --config cleanup.policy=compact
+
+# 4. Settings (once): cp .env.example .env, then set POSTGRES_PASSWORD in .env.
+#    In every terminal you use: load .env and point hosts and paths at this computer
+set -a; source .env; set +a
+export KAFKA_BOOTSTRAP_SERVERS=localhost:9092 POSTGRES_HOST=localhost POSTGRES_PORT=5432
+export DATA_DIR=./data MODEL_DIR=./models DOCS_DIR=./docs CHECKPOINT_DIR=./checkpoints
+export PYTHONPATH=$PWD
+export PYSPARK_SUBMIT_ARGS="--packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.4 pyspark-shell"
+
+# 5. Run in this order, each in its own terminal (after step 4)
+python -m src.training.train_model        # once, ~8 min
+python -m src.streaming.stream_processor
+python -m src.producer.producer
+streamlit run src/dashboard/app.py        # http://localhost:8501
+```
+
+> **Shortcut:** to skip installing Kafka and PostgreSQL, run only those two in Docker. Create `.env` first (step 4), then run `docker compose up -d kafka postgres kafka-init`, which also creates the tables and the topics. Skip steps 2–3, and in step 4 export `KAFKA_BOOTSTRAP_SERVERS=localhost:9094` and `POSTGRES_PORT=15432` instead.
+
 ---
 
 *Every page, in English and Arabic: [screenshots/](screenshots/). How the whole system works: [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md).*
