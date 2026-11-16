@@ -365,11 +365,11 @@ Every setting lives in **`.env`** (created from [.env.example](.env.example) by 
 
 | Document | Content |
 |---|---|
-| [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) | **Start here:** a short explanation of the whole system: theory, how it works, experiments and results |
+| [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) · [PDF](docs/SYSTEM_OVERVIEW.pdf) | **Start here:** a short explanation of the whole system: theory, how it works, experiments and results |
 | [PLAN.md](PLAN.md) | Approved design: architecture, message schemas, decisions, versions, risks |
 | [PROGRESS.md](PROGRESS.md) | What was done in each phase, problems found and fixed, measurements |
 | [REVIEW.md](REVIEW.md) | Independent review (Claude Fable 5.2) and the resolution of every finding |
-| [docs/THEORY_GUIDE.md](docs/THEORY_GUIDE.md) | Every idea in the system explained from zero, for students new to Kafka, Spark and machine learning |
+| [docs/THEORY_GUIDE.md](docs/THEORY_GUIDE.md) · [PDF](docs/THEORY_GUIDE.pdf) | Every idea in the system explained from zero, for students new to Kafka, Spark and machine learning |
 | [docs/DASHBOARD_GUIDE.md](docs/DASHBOARD_GUIDE.md) | A short tour of every dashboard page, with screenshots, and how to set the system up on another computer (Docker or native) |
 | [docs/RESULTS.md](docs/RESULTS.md) | Full training results, confidence intervals, methodology notes |
 | [docs/E2E_REPORT.md](docs/E2E_REPORT.md) | Latest end-to-end latency and throughput measurement |
